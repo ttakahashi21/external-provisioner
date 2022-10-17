@@ -27,6 +27,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/kubernetes-csi/csi-lib-utils/accessmodes"
+	"github.com/kubernetes-csi/external-provisioner/pkg/features"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -39,6 +40,7 @@ import (
 	_ "k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	coreinformers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -57,6 +59,7 @@ import (
 	"github.com/kubernetes-csi/csi-lib-utils/rpc"
 	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
 	snapclientset "github.com/kubernetes-csi/external-snapshotter/client/v6/clientset/versioned"
+	referenceGrantv1alpha2 "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1alpha2"
 )
 
 // secretParamsMap provides a mapping of current as well as deprecated secret keys
@@ -265,6 +268,7 @@ type csiProvisioner struct {
 	nodeLister                            corelisters.NodeLister
 	claimLister                           corelisters.PersistentVolumeClaimLister
 	vaLister                              storagelistersv1.VolumeAttachmentLister
+	referenceGrantLister                  referenceGrantv1alpha2.ReferenceGrantLister
 	extraCreateMetadata                   bool
 	eventRecorder                         record.EventRecorder
 	nodeDeployment                        *internalNodeDeployment
@@ -345,6 +349,7 @@ func NewCSIProvisioner(client kubernetes.Interface,
 	nodeLister corelisters.NodeLister,
 	claimLister corelisters.PersistentVolumeClaimLister,
 	vaLister storagelistersv1.VolumeAttachmentLister,
+	referenceGrantLister referenceGrantv1alpha2.ReferenceGrantLister,
 	extraCreateMetadata bool,
 	defaultFSType string,
 	nodeDeployment *NodeDeployment,
@@ -380,6 +385,7 @@ func NewCSIProvisioner(client kubernetes.Interface,
 		nodeLister:                            nodeLister,
 		claimLister:                           claimLister,
 		vaLister:                              vaLister,
+		referenceGrantLister:                  referenceGrantLister,
 		extraCreateMetadata:                   extraCreateMetadata,
 		eventRecorder:                         eventRecorder,
 		controllerPublishReadOnly:             controllerPublishReadOnly,
@@ -582,6 +588,21 @@ func (p *csiProvisioner) prepareProvision(ctx context.Context, claim *v1.Persist
 			}
 		}
 	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceSourceProvisioning) {
+		if claim.Spec.DataSourceRef2 != nil {
+			switch claim.Spec.DataSourceRef2.Kind {
+			case snapshotKind:
+				if *(claim.Spec.DataSourceRef2.APIGroup) != snapshotAPIGroup {
+					return nil, controller.ProvisioningFinished, fmt.Errorf("the PVC source does not belong to the right APIGroup. Expected %s, Got %s", snapshotAPIGroup, *(claim.Spec.DataSourceRef2.APIGroup))
+				}
+				rc.snapshot = true
+			default:
+				return nil, controller.ProvisioningFinished, fmt.Errorf("the PVC source specified via DataSourceRef2 does not belong to the right Kind.  Expected %s, Got %s", snapshotKind, claim.Spec.DataSourceRef2.Kind)
+			}
+		}
+	}
+
 	if err := p.checkDriverCapabilities(rc); err != nil {
 		return nil, controller.ProvisioningFinished, err
 	}
@@ -629,6 +650,16 @@ func (p *csiProvisioner) prepareProvision(ctx context.Context, claim *v1.Persist
 		CapacityRange: &csi.CapacityRange{
 			RequiredBytes: int64(volSizeBytes),
 		},
+	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceSourceProvisioning) {
+		if claim.Spec.DataSourceRef2 != nil && rc.snapshot {
+			volumeContentSource, err := p.getVolumeContentSourceFromDataSourceRef2(ctx, claim, sc)
+			if err != nil {
+				return nil, controller.ProvisioningNoChange, fmt.Errorf("error getting handle for DataSourceRef2 Type %s by Name %s: %v", claim.Spec.DataSourceRef2.Kind, claim.Spec.DataSourceRef2.Name, err)
+			}
+			req.VolumeContentSource = volumeContentSource
+		}
 	}
 
 	if claim.Spec.DataSource != nil && (rc.clone || rc.snapshot) {
@@ -834,7 +865,7 @@ func (p *csiProvisioner) Provision(ctx context.Context, options controller.Provi
 		return nil, controller.ProvisioningInBackground, capErr
 	}
 
-	if options.PVC.Spec.DataSource != nil {
+	if options.PVC.Spec.DataSource != nil || (utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceSourceProvisioning) && options.PVC.Spec.DataSourceRef2 != nil) {
 		contentSource := rep.GetVolume().ContentSource
 		if contentSource == nil {
 			sourceErr := fmt.Errorf("volume content source missing")
@@ -991,6 +1022,20 @@ func (p *csiProvisioner) getVolumeContentSource(ctx context.Context, claim *v1.P
 	}
 }
 
+// getVolumeContentSource is a helper function to process provisioning requests that include a DataSourceRef2
+// currently we only provide Snapshot, the default case allows the provisioner to still create a volume
+// so that an external controller can act upon it.   Additional DataSource types can be added here with
+// an appropriate implementation function
+func (p *csiProvisioner) getVolumeContentSourceFromDataSourceRef2(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass) (*csi.VolumeContentSource, error) {
+	switch claim.Spec.DataSourceRef2.Kind {
+	case snapshotKind:
+		return p.getSnapshotSourceDataSourceRef2(ctx, claim, sc)
+	default:
+		// For now we shouldn't pass other things to this function, but treat it as a noop and extend as needed
+		return nil, nil
+	}
+}
+
 // getPVCSource verifies DataSource.Kind of type PersistentVolumeClaim, making sure that the requested PVC is available/ready
 // returns the VolumeContentSource for the requested PVC
 func (p *csiProvisioner) getPVCSource(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass) (*csi.VolumeContentSource, error) {
@@ -1081,47 +1126,114 @@ func (p *csiProvisioner) getPVCSource(ctx context.Context, claim *v1.PersistentV
 	return volumeContentSource, nil
 }
 
+func (p *csiProvisioner) IsGranted(ctx context.Context, namespace, name string, claim *v1.PersistentVolumeClaim) (bool, error) {
+	if !utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceSourceProvisioning) {
+		return false, nil
+	}
+
+	// Get all ReferenceGrants in snapshot's namespace
+	referenceGrants, err := p.referenceGrantLister.ReferenceGrants(namespace).List(labels.Everything())
+	if err != nil {
+		return false, fmt.Errorf("error getting ReferenceGrants in %s namespace from api server: %v", namespace, err)
+	}
+
+	var allowed bool
+	// Check that accessing to {namespace}/{name} is allowed.
+	for _, grant := range referenceGrants  {
+		var validFrom bool
+		for _, from := range grant.Spec.From {
+			if from.Group == "" && from.Kind == pvcKind && string(from.Namespace) == claim.Namespace {
+				validFrom = true
+				break
+			}
+		}
+		// Skip unrelated policy by checking From field
+		if !validFrom {
+			continue
+		}
+
+		for _, to := range grant.Spec.To {
+			if to.Group != snapshotAPIGroup || to.Kind != snapshotKind {
+				continue
+			}
+			if to.Name == nil || string(*to.Name) == "" || string(*to.Name) == name {
+				allowed = true
+				break
+			}
+		}
+
+		if allowed {
+			break
+		}
+	}
+
+	if !allowed {
+		return false, nil
+	}
+
+	return true, nil
+}
+
 // getSnapshotSource verifies DataSource.Kind of type VolumeSnapshot, making sure that the requested Snapshot is available/ready
 // returns the VolumeContentSource for the requested snapshot
 func (p *csiProvisioner) getSnapshotSource(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass) (*csi.VolumeContentSource, error) {
-	snapshotObj, err := p.snapshotClient.SnapshotV1().VolumeSnapshots(claim.Namespace).Get(ctx, claim.Spec.DataSource.Name, metav1.GetOptions{})
+	return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Namespace, claim.Spec.DataSource.Name)
+}
+
+// getSnapshotSourceDataSourceRef2 verifies DataSourceRef2.Kind of type VolumeSnapshot, making sure that the requested Snapshot is available/ready
+// returns the VolumeContentSource for the requested snapshot
+func (p *csiProvisioner) getSnapshotSourceDataSourceRef2(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass) (*csi.VolumeContentSource, error) {
+	if claim.Spec.DataSourceRef2.Namespace == "" {
+		return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Namespace, claim.Spec.DataSourceRef2.Name)
+	}
+
+	if ok, err := p.IsGranted(ctx, claim.Spec.DataSourceRef2.Namespace, claim.Spec.DataSourceRef2.Name, claim); err != nil || !ok {
+		return nil, fmt.Errorf("accessing snapshot %s/%s from %s/%s isn't allowed", claim.Spec.DataSourceRef2.Namespace, claim.Spec.DataSourceRef2.Name, claim.Namespace, claim.Name)
+	}
+
+	return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Spec.DataSourceRef2.Namespace, claim.Spec.DataSourceRef2.Name)
+}
+
+// getSnapshotSourceInternal handles actual logic for getSnapshotSource
+func (p *csiProvisioner) getSnapshotSourceInternal(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass, snapNamespace, snapName string) (*csi.VolumeContentSource, error) {
+	snapshotObj, err := p.snapshotClient.SnapshotV1().VolumeSnapshots(snapNamespace).Get(ctx, snapName, metav1.GetOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("error getting snapshot %s from api server: %v", claim.Spec.DataSource.Name, err)
+		return nil, fmt.Errorf("error getting snapshot %s from api server: %v", snapName, err)
 	}
 
 	if snapshotObj.ObjectMeta.DeletionTimestamp != nil {
-		return nil, fmt.Errorf("snapshot %s is currently being deleted", claim.Spec.DataSource.Name)
+		return nil, fmt.Errorf("snapshot %s is currently being deleted", snapName)
 	}
 	klog.V(5).Infof("VolumeSnapshot %+v", snapshotObj)
 
 	if snapshotObj.Status == nil || snapshotObj.Status.BoundVolumeSnapshotContentName == nil {
-		return nil, fmt.Errorf(snapshotNotBound, claim.Spec.DataSource.Name)
+		return nil, fmt.Errorf(snapshotNotBound, snapName)
 	}
 
 	snapContentObj, err := p.snapshotClient.SnapshotV1().VolumeSnapshotContents().Get(ctx, *snapshotObj.Status.BoundVolumeSnapshotContentName, metav1.GetOptions{})
 	if err != nil {
 		klog.Warningf("error getting snapshotcontent %s for snapshot %s/%s from api server: %s", *snapshotObj.Status.BoundVolumeSnapshotContentName, snapshotObj.Namespace, snapshotObj.Name, err)
-		return nil, fmt.Errorf(snapshotNotBound, claim.Spec.DataSource.Name)
+		return nil, fmt.Errorf(snapshotNotBound, snapName)
 	}
 
 	if snapContentObj.Spec.VolumeSnapshotRef.UID != snapshotObj.UID || snapContentObj.Spec.VolumeSnapshotRef.Namespace != snapshotObj.Namespace || snapContentObj.Spec.VolumeSnapshotRef.Name != snapshotObj.Name {
 		klog.Warningf("snapshotcontent %s for snapshot %s/%s is bound to a different snapshot", *snapshotObj.Status.BoundVolumeSnapshotContentName, snapshotObj.Namespace, snapshotObj.Name)
-		return nil, fmt.Errorf(snapshotNotBound, claim.Spec.DataSource.Name)
+		return nil, fmt.Errorf(snapshotNotBound, snapName)
 	}
 
 	if snapContentObj.Spec.Driver != sc.Provisioner {
 		klog.Warningf("snapshotcontent %s for snapshot %s/%s is handled by a different CSI driver than requested by StorageClass %s", *snapshotObj.Status.BoundVolumeSnapshotContentName, snapshotObj.Namespace, snapshotObj.Name, sc.Name)
-		return nil, fmt.Errorf(snapshotNotBound, claim.Spec.DataSource.Name)
+		return nil, fmt.Errorf(snapshotNotBound, snapName)
 	}
 
 	if snapshotObj.Status.ReadyToUse == nil || *snapshotObj.Status.ReadyToUse == false {
-		return nil, fmt.Errorf("snapshot %s is not Ready", claim.Spec.DataSource.Name)
+		return nil, fmt.Errorf("snapshot %s is not Ready", snapName)
 	}
 
 	klog.V(5).Infof("VolumeSnapshotContent %+v", snapContentObj)
 
 	if snapContentObj.Status == nil || snapContentObj.Status.SnapshotHandle == nil {
-		return nil, fmt.Errorf("snapshot handle %s is not available", claim.Spec.DataSource.Name)
+		return nil, fmt.Errorf("snapshot handle %s is not available", snapName)
 	}
 
 	snapshotSource := csi.VolumeContentSource_Snapshot{
