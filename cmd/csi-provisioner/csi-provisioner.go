@@ -196,7 +196,7 @@ func main() {
 	}
 
 	var gatewayClient gatewayclientset.Interface
-	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceSourceProvisioning) {
+	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
 		// gatewayclientset.NewForConfig creates a new Clientset for GatewayClient
 		gatewayClient, err = gatewayclientset.NewForConfig(config)
 		if err != nil {
@@ -368,7 +368,7 @@ func main() {
 
 	var referenceGrantLister referenceGrantv1alpha2.ReferenceGrantLister
 	var gatewayFactory gatewayInformers.SharedInformerFactory
-	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceSourceProvisioning) {
+	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
 		// TODO: update resync period
 		gatewayFactory = gatewayInformers.NewSharedInformerFactory(gatewayClient, ctrl.ResyncPeriodOfCsiNodeInformer)
 		referenceGrants := gatewayFactory.Gateway().V1alpha2().ReferenceGrants()
@@ -626,7 +626,7 @@ func main() {
 			}
 		}
 
-		if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceSourceProvisioning) {
+		if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
 			if gatewayFactory != nil {
 				gatewayFactory.Start(ctx.Done())
 			}

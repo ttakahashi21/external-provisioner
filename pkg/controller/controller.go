@@ -589,16 +589,16 @@ func (p *csiProvisioner) prepareProvision(ctx context.Context, claim *v1.Persist
 		}
 	}
 
-	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceSourceProvisioning) {
-		if claim.Spec.DataSourceRef2 != nil {
-			switch claim.Spec.DataSourceRef2.Kind {
+	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
+		if claim.Spec.DataSourceRef != nil && len(claim.Spec.DataSourceRef.Namespace) > 0 {
+			switch claim.Spec.DataSourceRef.Kind {
 			case snapshotKind:
-				if *(claim.Spec.DataSourceRef2.APIGroup) != snapshotAPIGroup {
-					return nil, controller.ProvisioningFinished, fmt.Errorf("the PVC source does not belong to the right APIGroup. Expected %s, Got %s", snapshotAPIGroup, *(claim.Spec.DataSourceRef2.APIGroup))
+				if *(claim.Spec.DataSourceRef.APIGroup) != snapshotAPIGroup {
+					return nil, controller.ProvisioningFinished, fmt.Errorf("the PVC source does not belong to the right APIGroup. Expected %s, Got %s", snapshotAPIGroup, *(claim.Spec.DataSourceRef.APIGroup))
 				}
 				rc.snapshot = true
 			default:
-				return nil, controller.ProvisioningFinished, fmt.Errorf("the PVC source specified via DataSourceRef2 does not belong to the right Kind.  Expected %s, Got %s", snapshotKind, claim.Spec.DataSourceRef2.Kind)
+				return nil, controller.ProvisioningFinished, fmt.Errorf("the PVC source specified via DataSourceRef with non-empty namespace does not belong to the right Kind.  Expected %s, Got %s", snapshotKind, claim.Spec.DataSourceRef.Kind)
 			}
 		}
 	}
@@ -652,17 +652,15 @@ func (p *csiProvisioner) prepareProvision(ctx context.Context, claim *v1.Persist
 		},
 	}
 
-	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceSourceProvisioning) {
-		if claim.Spec.DataSourceRef2 != nil && rc.snapshot {
-			volumeContentSource, err := p.getVolumeContentSourceFromDataSourceRef2(ctx, claim, sc)
+	if claim.Spec.DataSourceRef != nil && len(claim.Spec.DataSourceRef.Namespace) > 0 && rc.snapshot {
+		if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
+			volumeContentSource, err := p.getVolumeContentSourceFromXnsDataSource(ctx, claim, sc)
 			if err != nil {
-				return nil, controller.ProvisioningNoChange, fmt.Errorf("error getting handle for DataSourceRef2 Type %s by Name %s: %v", claim.Spec.DataSourceRef2.Kind, claim.Spec.DataSourceRef2.Name, err)
+				return nil, controller.ProvisioningNoChange, fmt.Errorf("error getting handle for DataSourceRef Type %s with non-empty namespace by Name %s: %v", claim.Spec.DataSourceRef.Kind, claim.Spec.DataSourceRef.Name, err)
 			}
 			req.VolumeContentSource = volumeContentSource
 		}
-	}
-
-	if claim.Spec.DataSource != nil && (rc.clone || rc.snapshot) {
+	} else if claim.Spec.DataSource != nil && (rc.clone || rc.snapshot) {
 		volumeContentSource, err := p.getVolumeContentSource(ctx, claim, sc)
 		if err != nil {
 			return nil, controller.ProvisioningNoChange, fmt.Errorf("error getting handle for DataSource Type %s by Name %s: %v", claim.Spec.DataSource.Kind, claim.Spec.DataSource.Name, err)
@@ -865,7 +863,9 @@ func (p *csiProvisioner) Provision(ctx context.Context, options controller.Provi
 		return nil, controller.ProvisioningInBackground, capErr
 	}
 
-	if options.PVC.Spec.DataSource != nil || (utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceSourceProvisioning) && options.PVC.Spec.DataSourceRef2 != nil) {
+	if options.PVC.Spec.DataSource != nil ||
+		(utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) &&
+			options.PVC.Spec.DataSourceRef != nil && len(options.PVC.Spec.DataSourceRef.Namespace) > 0) {
 		contentSource := rep.GetVolume().ContentSource
 		if contentSource == nil {
 			sourceErr := fmt.Errorf("volume content source missing")
@@ -1022,14 +1022,15 @@ func (p *csiProvisioner) getVolumeContentSource(ctx context.Context, claim *v1.P
 	}
 }
 
-// getVolumeContentSource is a helper function to process provisioning requests that include a DataSourceRef2
-// currently we only provide Snapshot, the default case allows the provisioner to still create a volume
-// so that an external controller can act upon it.   Additional DataSource types can be added here with
+// getVolumeContentSourceFromXnsDataSource is a helper function to process provisioning requests that include a DataSourceRef
+// with non-empty namespace.
+// Currently we only provide Snapshot, the default case allows the provisioner to still create a volume
+// so that an external controller can act upon it.  Additional DataSource types can be added here with
 // an appropriate implementation function
-func (p *csiProvisioner) getVolumeContentSourceFromDataSourceRef2(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass) (*csi.VolumeContentSource, error) {
-	switch claim.Spec.DataSourceRef2.Kind {
+func (p *csiProvisioner) getVolumeContentSourceFromXnsDataSource(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass) (*csi.VolumeContentSource, error) {
+	switch claim.Spec.DataSourceRef.Kind {
 	case snapshotKind:
-		return p.getSnapshotSourceDataSourceRef2(ctx, claim, sc)
+		return p.getSnapshotSourceFromXnsDataSource(ctx, claim, sc)
 	default:
 		// For now we shouldn't pass other things to this function, but treat it as a noop and extend as needed
 		return nil, nil
@@ -1127,7 +1128,7 @@ func (p *csiProvisioner) getPVCSource(ctx context.Context, claim *v1.PersistentV
 }
 
 func (p *csiProvisioner) IsGranted(ctx context.Context, namespace, name string, claim *v1.PersistentVolumeClaim) (bool, error) {
-	if !utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceSourceProvisioning) {
+	if !utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
 		return false, nil
 	}
 
@@ -1139,7 +1140,7 @@ func (p *csiProvisioner) IsGranted(ctx context.Context, namespace, name string, 
 
 	var allowed bool
 	// Check that accessing to {namespace}/{name} is allowed.
-	for _, grant := range referenceGrants  {
+	for _, grant := range referenceGrants {
 		var validFrom bool
 		for _, from := range grant.Spec.From {
 			if from.Group == "" && from.Kind == pvcKind && string(from.Namespace) == claim.Namespace {
@@ -1180,18 +1181,18 @@ func (p *csiProvisioner) getSnapshotSource(ctx context.Context, claim *v1.Persis
 	return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Namespace, claim.Spec.DataSource.Name)
 }
 
-// getSnapshotSourceDataSourceRef2 verifies DataSourceRef2.Kind of type VolumeSnapshot, making sure that the requested Snapshot is available/ready
+// getSnapshotSourceFromXnsDataSource verifies DataSourceRef.Kind of type VolumeSnapshot, making sure that the requested Snapshot is available/ready
 // returns the VolumeContentSource for the requested snapshot
-func (p *csiProvisioner) getSnapshotSourceDataSourceRef2(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass) (*csi.VolumeContentSource, error) {
-	if claim.Spec.DataSourceRef2.Namespace == "" {
-		return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Namespace, claim.Spec.DataSourceRef2.Name)
+func (p *csiProvisioner) getSnapshotSourceFromXnsDataSource(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass) (*csi.VolumeContentSource, error) {
+	if claim.Spec.DataSourceRef.Namespace == "" {
+		return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Namespace, claim.Spec.DataSourceRef.Name)
 	}
 
-	if ok, err := p.IsGranted(ctx, claim.Spec.DataSourceRef2.Namespace, claim.Spec.DataSourceRef2.Name, claim); err != nil || !ok {
-		return nil, fmt.Errorf("accessing snapshot %s/%s from %s/%s isn't allowed", claim.Spec.DataSourceRef2.Namespace, claim.Spec.DataSourceRef2.Name, claim.Namespace, claim.Name)
+	if ok, err := p.IsGranted(ctx, claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim); err != nil || !ok {
+		return nil, fmt.Errorf("accessing snapshot %s/%s from %s/%s isn't allowed", claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Namespace, claim.Name)
 	}
 
-	return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Spec.DataSourceRef2.Namespace, claim.Spec.DataSourceRef2.Name)
+	return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name)
 }
 
 // getSnapshotSourceInternal handles actual logic for getSnapshotSource
