@@ -66,7 +66,7 @@ import (
 	snapclientset "github.com/kubernetes-csi/external-snapshotter/client/v6/clientset/versioned"
 	gatewayclientset "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned"
 	gatewayInformers "sigs.k8s.io/gateway-api/pkg/client/informers/externalversions"
-	referenceGrantv1alpha2 "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1alpha2"
+	referenceGrantv1beta1 "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1beta1"
 )
 
 var (
@@ -366,12 +366,12 @@ func main() {
 		}
 	}
 
-	var referenceGrantLister referenceGrantv1alpha2.ReferenceGrantLister
+	var referenceGrantLister referenceGrantv1beta1.ReferenceGrantLister
 	var gatewayFactory gatewayInformers.SharedInformerFactory
 	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
 		// TODO: update resync period
 		gatewayFactory = gatewayInformers.NewSharedInformerFactory(gatewayClient, ctrl.ResyncPeriodOfCsiNodeInformer)
-		referenceGrants := gatewayFactory.Gateway().V1alpha2().ReferenceGrants()
+		referenceGrants := gatewayFactory.Gateway().V1beta1().ReferenceGrants()
 		referenceGrantLister = referenceGrants.Lister()
 	}
 

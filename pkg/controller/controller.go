@@ -59,7 +59,7 @@ import (
 	"github.com/kubernetes-csi/csi-lib-utils/rpc"
 	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
 	snapclientset "github.com/kubernetes-csi/external-snapshotter/client/v6/clientset/versioned"
-	referenceGrantv1alpha2 "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1alpha2"
+	referenceGrantv1beta1 "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1beta1"
 )
 
 // secretParamsMap provides a mapping of current as well as deprecated secret keys
@@ -268,7 +268,7 @@ type csiProvisioner struct {
 	nodeLister                            corelisters.NodeLister
 	claimLister                           corelisters.PersistentVolumeClaimLister
 	vaLister                              storagelistersv1.VolumeAttachmentLister
-	referenceGrantLister                  referenceGrantv1alpha2.ReferenceGrantLister
+	referenceGrantLister                  referenceGrantv1beta1.ReferenceGrantLister
 	extraCreateMetadata                   bool
 	eventRecorder                         record.EventRecorder
 	nodeDeployment                        *internalNodeDeployment
@@ -349,7 +349,7 @@ func NewCSIProvisioner(client kubernetes.Interface,
 	nodeLister corelisters.NodeLister,
 	claimLister corelisters.PersistentVolumeClaimLister,
 	vaLister storagelistersv1.VolumeAttachmentLister,
-	referenceGrantLister referenceGrantv1alpha2.ReferenceGrantLister,
+	referenceGrantLister referenceGrantv1beta1.ReferenceGrantLister,
 	extraCreateMetadata bool,
 	defaultFSType string,
 	nodeDeployment *NodeDeployment,
@@ -590,7 +590,7 @@ func (p *csiProvisioner) prepareProvision(ctx context.Context, claim *v1.Persist
 	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
-		if claim.Spec.DataSourceRef != nil && len(claim.Spec.DataSourceRef.Namespace) > 0 {
+		if claim.Spec.DataSourceRef != nil && claim.Spec.DataSourceRef.Namespace != nil && len(*claim.Spec.DataSourceRef.Namespace) > 0 {
 			switch claim.Spec.DataSourceRef.Kind {
 			case snapshotKind:
 				if *(claim.Spec.DataSourceRef.APIGroup) != snapshotAPIGroup {
@@ -652,7 +652,7 @@ func (p *csiProvisioner) prepareProvision(ctx context.Context, claim *v1.Persist
 		},
 	}
 
-	if claim.Spec.DataSourceRef != nil && len(claim.Spec.DataSourceRef.Namespace) > 0 && rc.snapshot {
+	if claim.Spec.DataSourceRef != nil && claim.Spec.DataSourceRef.Namespace != nil && len(*claim.Spec.DataSourceRef.Namespace) > 0 && rc.snapshot {
 		if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
 			volumeContentSource, err := p.getVolumeContentSourceFromXnsDataSource(ctx, claim, sc)
 			if err != nil {
@@ -865,7 +865,7 @@ func (p *csiProvisioner) Provision(ctx context.Context, options controller.Provi
 
 	if options.PVC.Spec.DataSource != nil ||
 		(utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) &&
-			options.PVC.Spec.DataSourceRef != nil && len(options.PVC.Spec.DataSourceRef.Namespace) > 0) {
+			options.PVC.Spec.DataSourceRef != nil && len(*options.PVC.Spec.DataSourceRef.Namespace) > 0) {
 		contentSource := rep.GetVolume().ContentSource
 		if contentSource == nil {
 			sourceErr := fmt.Errorf("volume content source missing")
@@ -1184,15 +1184,15 @@ func (p *csiProvisioner) getSnapshotSource(ctx context.Context, claim *v1.Persis
 // getSnapshotSourceFromXnsDataSource verifies DataSourceRef.Kind of type VolumeSnapshot, making sure that the requested Snapshot is available/ready
 // returns the VolumeContentSource for the requested snapshot
 func (p *csiProvisioner) getSnapshotSourceFromXnsDataSource(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass) (*csi.VolumeContentSource, error) {
-	if claim.Spec.DataSourceRef.Namespace == "" {
+	if claim.Spec.DataSourceRef.Namespace == nil || *claim.Spec.DataSourceRef.Namespace == "" {
 		return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Namespace, claim.Spec.DataSourceRef.Name)
 	}
 
-	if ok, err := p.IsGranted(ctx, claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim); err != nil || !ok {
-		return nil, fmt.Errorf("accessing snapshot %s/%s from %s/%s isn't allowed", claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Namespace, claim.Name)
+	if ok, err := p.IsGranted(ctx, *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim); err != nil || !ok {
+		return nil, fmt.Errorf("accessing snapshot %s/%s from %s/%s isn't allowed", *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Namespace, claim.Name)
 	}
 
-	return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name)
+	return p.getSnapshotSourceInternal(ctx, claim, sc, *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name)
 }
 
 // getSnapshotSourceInternal handles actual logic for getSnapshotSource
