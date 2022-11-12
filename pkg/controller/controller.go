@@ -128,7 +128,8 @@ const (
 	tokenPVCNameKey      = "pvc.name"
 	tokenPVCNameSpaceKey = "pvc.namespace"
 
-	ResyncPeriodOfCsiNodeInformer = 1 * time.Hour
+	ResyncPeriodOfCsiNodeInformer        = 1 * time.Hour
+	ResyncPeriodOfReferenceGrantInformer = 1 * time.Hour
 
 	deleteVolumeRetryCount = 5
 
@@ -1187,7 +1188,8 @@ func (p *csiProvisioner) getSnapshotSource(ctx context.Context, claim *v1.Persis
 // getSnapshotSourceFromXnsDataSource verifies DataSourceRef.Kind of type VolumeSnapshot, making sure that the requested Snapshot is available/ready
 // returns the VolumeContentSource for the requested snapshot
 func (p *csiProvisioner) getSnapshotSourceFromXnsDataSource(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass) (*csi.VolumeContentSource, error) {
-	if claim.Spec.DataSourceRef.Namespace == nil || *claim.Spec.DataSourceRef.Namespace == "" {
+	if claim.Spec.DataSourceRef.Namespace == nil || *claim.Spec.DataSourceRef.Namespace == "" || claim.Namespace == *claim.Spec.DataSourceRef.Namespace {
+		// if claim.Spec.DataSourceRef.Namespace == nil || *claim.Spec.DataSourceRef.Namespace == "" {
 		return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Namespace, claim.Spec.DataSourceRef.Name)
 	}
 
