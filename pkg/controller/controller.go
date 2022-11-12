@@ -128,7 +128,8 @@ const (
 	tokenPVCNameKey      = "pvc.name"
 	tokenPVCNameSpaceKey = "pvc.namespace"
 
-	ResyncPeriodOfCsiNodeInformer = 1 * time.Hour
+	ResyncPeriodOfCsiNodeInformer        = 1 * time.Hour
+	ResyncPeriodOfReferenceGrantInformer = 1 * time.Hour
 
 	deleteVolumeRetryCount = 5
 
@@ -652,13 +653,15 @@ func (p *csiProvisioner) prepareProvision(ctx context.Context, claim *v1.Persist
 		},
 	}
 
-	if claim.Spec.DataSourceRef != nil && claim.Spec.DataSourceRef.Namespace != nil && len(*claim.Spec.DataSourceRef.Namespace) > 0 && rc.snapshot {
-		if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
+	if claim.Spec.DataSourceRef != nil && claim.Spec.DataSourceRef.Namespace != nil && len(*claim.Spec.DataSourceRef.Namespace) > 0 {
+		if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) && rc.snapshot {
 			volumeContentSource, err := p.getVolumeContentSourceFromXnsDataSource(ctx, claim, sc)
 			if err != nil {
 				return nil, controller.ProvisioningNoChange, fmt.Errorf("error getting handle for DataSourceRef Type %s with non-empty namespace by Name %s: %v", claim.Spec.DataSourceRef.Kind, claim.Spec.DataSourceRef.Name, err)
 			}
 			req.VolumeContentSource = volumeContentSource
+		} else {
+			return nil, controller.ProvisioningNoChange, fmt.Errorf("error handling for DataSourceRef Type %s with non-empty namespace by Name %s: CrossNamespaceVolumeDataSource feature disabled", claim.Spec.DataSourceRef.Kind, claim.Spec.DataSourceRef.Name)
 		}
 	} else if claim.Spec.DataSource != nil && (rc.clone || rc.snapshot) {
 		volumeContentSource, err := p.getVolumeContentSource(ctx, claim, sc)
@@ -865,7 +868,8 @@ func (p *csiProvisioner) Provision(ctx context.Context, options controller.Provi
 
 	if options.PVC.Spec.DataSource != nil ||
 		(utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) &&
-			options.PVC.Spec.DataSourceRef != nil && len(*options.PVC.Spec.DataSourceRef.Namespace) > 0) {
+			options.PVC.Spec.DataSourceRef != nil && options.PVC.Spec.DataSourceRef.Namespace != nil &&
+			len(*options.PVC.Spec.DataSourceRef.Namespace) > 0) {
 		contentSource := rep.GetVolume().ContentSource
 		if contentSource == nil {
 			sourceErr := fmt.Errorf("volume content source missing")
@@ -1184,7 +1188,8 @@ func (p *csiProvisioner) getSnapshotSource(ctx context.Context, claim *v1.Persis
 // getSnapshotSourceFromXnsDataSource verifies DataSourceRef.Kind of type VolumeSnapshot, making sure that the requested Snapshot is available/ready
 // returns the VolumeContentSource for the requested snapshot
 func (p *csiProvisioner) getSnapshotSourceFromXnsDataSource(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass) (*csi.VolumeContentSource, error) {
-	if claim.Spec.DataSourceRef.Namespace == nil || *claim.Spec.DataSourceRef.Namespace == "" {
+	if claim.Spec.DataSourceRef.Namespace == nil || *claim.Spec.DataSourceRef.Namespace == "" || claim.Namespace == *claim.Spec.DataSourceRef.Namespace {
+		// if claim.Spec.DataSourceRef.Namespace == nil || *claim.Spec.DataSourceRef.Namespace == "" {
 		return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Namespace, claim.Spec.DataSourceRef.Name)
 	}
 
