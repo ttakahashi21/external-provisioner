@@ -369,8 +369,7 @@ func main() {
 	var referenceGrantLister referenceGrantv1beta1.ReferenceGrantLister
 	var gatewayFactory gatewayInformers.SharedInformerFactory
 	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
-		// TODO: update resync period
-		gatewayFactory = gatewayInformers.NewSharedInformerFactory(gatewayClient, ctrl.ResyncPeriodOfCsiNodeInformer)
+		gatewayFactory = gatewayInformers.NewSharedInformerFactory(gatewayClient, ctrl.ResyncPeriodOfReferenceGrantInformer)
 		referenceGrants := gatewayFactory.Gateway().V1beta1().ReferenceGrants()
 		referenceGrantLister = referenceGrants.Lister()
 	}

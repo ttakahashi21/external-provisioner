@@ -2699,7 +2699,8 @@ func TestProvisionFromSnapshot(t *testing.T) {
 		Time: time.Unix(0, timeNow),
 	}
 	deletePolicy := v1.PersistentVolumeReclaimDelete
-	ns := "ns1"
+	ns1 := "ns1"
+	ns2 := "ns2"
 
 	type pvSpec struct {
 		Name          string
@@ -3352,7 +3353,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						UID:         "testid",
 						Annotations: driverNameAnnotation,
-						Namespace:   "default",
+						Namespace:   ns2,
 					},
 					Spec: v1.PersistentVolumeClaimSpec{
 						StorageClassName: &snapClassName,
@@ -3366,7 +3367,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 							Name:      snapName,
 							Kind:      "VolumeSnapshot",
 							APIGroup:  &apiGrp,
-							Namespace: &ns,
+							Namespace: &ns1,
 						},
 					},
 				},
@@ -3390,8 +3391,60 @@ func TestProvisionFromSnapshot(t *testing.T) {
 			},
 			expectCSICall: true,
 			xnsEnabled:    true,
-			snapNamespace: ns,
-			refGrant:      newRefGrant("refGrant1", ns, "default", apiGrp, "VolumeSnapshot"),
+			snapNamespace: ns1,
+			refGrant:      newRefGrant("refGrant1", ns1, ns2, apiGrp, "VolumeSnapshot"),
+		},
+		"provision with same ns volume snapshot data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
+			volOpts: controller.ProvisionOptions{
+				StorageClass: &storagev1.StorageClass{
+					ReclaimPolicy: &deletePolicy,
+					Parameters:    map[string]string{},
+					Provisioner:   "test-driver",
+				},
+				PVName: "test-name",
+				PVC: &v1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						UID:         "testid",
+						Annotations: driverNameAnnotation,
+						Namespace:   ns1,
+					},
+					Spec: v1.PersistentVolumeClaimSpec{
+						StorageClassName: &snapClassName,
+						Resources: v1.ResourceRequirements{
+							Requests: v1.ResourceList{
+								v1.ResourceName(v1.ResourceStorage): resource.MustParse(strconv.FormatInt(requestedBytes, 10)),
+							},
+						},
+						AccessModes: []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+						DataSourceRef: &v1.TypedObjectReference{
+							Name:      snapName,
+							Kind:      "VolumeSnapshot",
+							APIGroup:  &apiGrp,
+							Namespace: &ns1,
+						},
+					},
+				},
+			},
+			snapshotStatusReady: true,
+			expectedPVSpec: &pvSpec{
+				Name:          "test-testi",
+				ReclaimPolicy: v1.PersistentVolumeReclaimDelete,
+				AccessModes:   []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+				Capacity: v1.ResourceList{
+					v1.ResourceName(v1.ResourceStorage): bytesToQuantity(requestedBytes),
+				},
+				CSIPVS: &v1.CSIPersistentVolumeSource{
+					Driver:       "test-driver",
+					VolumeHandle: "test-volume-id",
+					FSType:       "ext4",
+					VolumeAttributes: map[string]string{
+						"storage.kubernetes.io/csiProvisionerIdentity": "test-provisioner",
+					},
+				},
+			},
+			expectCSICall: true,
+			xnsEnabled:    true,
+			snapNamespace: ns1,
 		},
 		"fail provision with xns volume snapshot data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			volOpts: controller.ProvisionOptions{
@@ -3405,7 +3458,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						UID:         "testid",
 						Annotations: driverNameAnnotation,
-						Namespace:   "default",
+						Namespace:   ns2,
 					},
 					Spec: v1.PersistentVolumeClaimSpec{
 						StorageClassName: &snapClassName,
@@ -3419,7 +3472,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 							Name:      snapName,
 							Kind:      "VolumeSnapshot",
 							APIGroup:  &apiGrp,
-							Namespace: &ns,
+							Namespace: &ns1,
 						},
 					},
 				},
@@ -3427,7 +3480,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 			snapshotStatusReady: true,
 			expectErr:           true,
 			xnsEnabled:          true,
-			snapNamespace:       ns,
+			snapNamespace:       ns1,
 		},
 		"fail provision with xns volume snapshot data source with refgrant when CrossNamespaceVolumeDataSource feature disabled": {
 			volOpts: controller.ProvisionOptions{
@@ -3441,7 +3494,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						UID:         "testid",
 						Annotations: driverNameAnnotation,
-						Namespace:   "default",
+						Namespace:   ns2,
 					},
 					Spec: v1.PersistentVolumeClaimSpec{
 						StorageClassName: &snapClassName,
@@ -3455,15 +3508,52 @@ func TestProvisionFromSnapshot(t *testing.T) {
 							Name:      snapName,
 							Kind:      "VolumeSnapshot",
 							APIGroup:  &apiGrp,
-							Namespace: &ns,
+							Namespace: &ns1,
 						},
 					},
 				},
 			},
 			snapshotStatusReady: true,
 			expectErr:           true,
-			refGrant:            newRefGrant("refGrant1", ns, "default", apiGrp, "VolumeSnapshot"),
-			snapNamespace:       ns,
+			refGrant:            newRefGrant("refGrant1", ns1, ns2, apiGrp, "VolumeSnapshot"),
+			snapNamespace:       ns1,
+		},
+		"fail provision with xns volume snapshot data source with bad refgrant when CrossNamespaceVolumeDataSource feature enabled": {
+			volOpts: controller.ProvisionOptions{
+				StorageClass: &storagev1.StorageClass{
+					ReclaimPolicy: &deletePolicy,
+					Parameters:    map[string]string{},
+					Provisioner:   "test-driver",
+				},
+				PVName: "test-name",
+				PVC: &v1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						UID:         "testid",
+						Annotations: driverNameAnnotation,
+						Namespace:   ns2,
+					},
+					Spec: v1.PersistentVolumeClaimSpec{
+						StorageClassName: &snapClassName,
+						Resources: v1.ResourceRequirements{
+							Requests: v1.ResourceList{
+								v1.ResourceName(v1.ResourceStorage): resource.MustParse(strconv.FormatInt(requestedBytes, 10)),
+							},
+						},
+						AccessModes: []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+						DataSourceRef: &v1.TypedObjectReference{
+							Name:      snapName,
+							Kind:      "VolumeSnapshot",
+							APIGroup:  &apiGrp,
+							Namespace: &ns1,
+						},
+					},
+				},
+			},
+			snapshotStatusReady: true,
+			expectErr:           true,
+			xnsEnabled:          true,
+			refGrant:            newRefGrant("refGrant1", "badnamespace", ns2, apiGrp, "VolumeSnapshot"),
+			snapNamespace:       ns1,
 		},
 	}
 
@@ -3538,7 +3628,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 		}
 
 		if tc.xnsEnabled {
-			gatewayFactory := gatewayInformers.NewSharedInformerFactory(gatewayClient, ResyncPeriodOfCsiNodeInformer)
+			gatewayFactory := gatewayInformers.NewSharedInformerFactory(gatewayClient, ResyncPeriodOfReferenceGrantInformer)
 			referenceGrants := gatewayFactory.Gateway().V1beta1().ReferenceGrants()
 			refGrantLister = referenceGrants.Lister()
 
