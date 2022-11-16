@@ -1056,7 +1056,7 @@ func (p *csiProvisioner) getPVCSource(ctx context.Context, claim *v1.PersistentV
 			if claim.Namespace == *claim.Spec.DataSourceRef.Namespace {
 				sourcePVC, err = p.claimLister.PersistentVolumeClaims(claim.Namespace).Get(claim.Spec.DataSource.Name)
 			} else {
-				if ok, err := p.IsGranted(ctx, *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim); err != nil || !ok {
+				if ok, err := p.IsGranted(ctx, claim); err != nil || !ok {
 					return nil, fmt.Errorf("accessing snapshot %s/%s from %s/%s isn't allowed", *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Namespace, claim.Name)
 				}
 				sourcePVC, err = p.claimLister.PersistentVolumeClaims(*claim.Spec.DataSourceRef.Namespace).Get(claim.Spec.DataSourceRef.Name)
@@ -1155,15 +1155,15 @@ func (p *csiProvisioner) getPVCSource(ctx context.Context, claim *v1.PersistentV
 	return volumeContentSource, nil
 }
 
-func (p *csiProvisioner) IsGranted(ctx context.Context, namespace, name string, claim *v1.PersistentVolumeClaim) (bool, error) {
+func (p *csiProvisioner) IsGranted(ctx context.Context, claim *v1.PersistentVolumeClaim) (bool, error) {
 	if !utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
 		return false, nil
 	}
 
 	// Get all ReferenceGrants in snapshot's namespace
-	referenceGrants, err := p.referenceGrantLister.ReferenceGrants(namespace).List(labels.Everything())
+	referenceGrants, err := p.referenceGrantLister.ReferenceGrants(*claim.Spec.DataSourceRef.Namespace).List(labels.Everything())
 	if err != nil {
-		return false, fmt.Errorf("error getting ReferenceGrants in %s namespace from api server: %v", namespace, err)
+		return false, fmt.Errorf("error getting ReferenceGrants in %s namespace from api server: %v", *claim.Spec.DataSourceRef.Namespace, err)
 	}
 
 	var allowed bool
@@ -1185,7 +1185,7 @@ func (p *csiProvisioner) IsGranted(ctx context.Context, namespace, name string, 
 			if string(to.Group) != *claim.Spec.DataSourceRef.APIGroup || string(to.Kind) != claim.Spec.DataSourceRef.Kind {
 				continue
 			}
-			if to.Name == nil || string(*to.Name) == "" || string(*to.Name) == name {
+			if to.Name == nil || string(*to.Name) == "" || string(*to.Name) == claim.Spec.DataSourceRef.Name {
 				allowed = true
 				break
 			}
@@ -1211,7 +1211,7 @@ func (p *csiProvisioner) getSnapshotSource(ctx context.Context, claim *v1.Persis
 			if claim.Namespace == *claim.Spec.DataSourceRef.Namespace {
 				return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Namespace, claim.Spec.DataSourceRef.Name)
 			} else {
-				if ok, err := p.IsGranted(ctx, *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim); err != nil || !ok {
+				if ok, err := p.IsGranted(ctx, claim); err != nil || !ok {
 					return nil, fmt.Errorf("accessing snapshot %s/%s from %s/%s isn't allowed", *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Namespace, claim.Name)
 				}
 				return p.getSnapshotSourceInternal(ctx, claim, sc, *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name)
