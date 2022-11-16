@@ -3446,6 +3446,57 @@ func TestProvisionFromSnapshot(t *testing.T) {
 			xnsEnabled:    true,
 			snapNamespace: ns1,
 		},
+		"provision with non-ns volume snapshot data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
+			volOpts: controller.ProvisionOptions{
+				StorageClass: &storagev1.StorageClass{
+					ReclaimPolicy: &deletePolicy,
+					Parameters:    map[string]string{},
+					Provisioner:   "test-driver",
+				},
+				PVName: "test-name",
+				PVC: &v1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						UID:         "testid",
+						Annotations: driverNameAnnotation,
+						Namespace:   ns1,
+					},
+					Spec: v1.PersistentVolumeClaimSpec{
+						StorageClassName: &snapClassName,
+						Resources: v1.ResourceRequirements{
+							Requests: v1.ResourceList{
+								v1.ResourceName(v1.ResourceStorage): resource.MustParse(strconv.FormatInt(requestedBytes, 10)),
+							},
+						},
+						AccessModes: []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+						DataSourceRef: &v1.TypedObjectReference{
+							Name:     snapName,
+							Kind:     "VolumeSnapshot",
+							APIGroup: &apiGrp,
+						},
+					},
+				},
+			},
+			snapshotStatusReady: true,
+			expectedPVSpec: &pvSpec{
+				Name:          "test-testi",
+				ReclaimPolicy: v1.PersistentVolumeReclaimDelete,
+				AccessModes:   []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+				Capacity: v1.ResourceList{
+					v1.ResourceName(v1.ResourceStorage): bytesToQuantity(requestedBytes),
+				},
+				CSIPVS: &v1.CSIPersistentVolumeSource{
+					Driver:       "test-driver",
+					VolumeHandle: "test-volume-id",
+					FSType:       "ext4",
+					VolumeAttributes: map[string]string{
+						"storage.kubernetes.io/csiProvisionerIdentity": "test-provisioner",
+					},
+				},
+			},
+			expectCSICall: true,
+			xnsEnabled:    true,
+			snapNamespace: ns1,
+		},
 		"fail provision with xns volume snapshot data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			volOpts: controller.ProvisionOptions{
 				StorageClass: &storagev1.StorageClass{
@@ -4752,6 +4803,92 @@ func generatePVCForProvisionFromPVC(srcNamespace, srcName, scName string, reques
 	return provisionRequest
 }
 
+// generatePVCForProvisionFromPVC returns a ProvisionOptions with the requested settings
+func generatePVCForProvisionFromXnsPVC(srcNamespace, srcName, scName, kind string, refpvcNamespace, apiGroup *string, requestedBytes int64, volumeMode string, setnamespace bool) controller.ProvisionOptions {
+	deletePolicy := v1.PersistentVolumeReclaimDelete
+
+	var provisionRequest controller.ProvisionOptions
+	if setnamespace {
+		provisionRequest = controller.ProvisionOptions{
+			StorageClass: &storagev1.StorageClass{
+				ReclaimPolicy: &deletePolicy,
+				Parameters:    map[string]string{"csi.storage.k8s.io/fstype": "ext4"},
+				Provisioner:   driverName,
+			},
+			PVName: "new-pv-name",
+			PVC: &v1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "my-pvc",
+					Namespace:   srcNamespace,
+					UID:         "testid",
+					Annotations: driverNameAnnotation,
+				},
+				Spec: v1.PersistentVolumeClaimSpec{
+					Selector: nil,
+					Resources: v1.ResourceRequirements{
+						Requests: v1.ResourceList{
+							v1.ResourceName(v1.ResourceStorage): *resource.NewQuantity(requestedBytes, resource.BinarySI),
+						},
+					},
+					AccessModes: []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+					DataSourceRef: &v1.TypedObjectReference{
+						APIGroup:  apiGroup,
+						Kind:      kind,
+						Name:      srcName,
+						Namespace: refpvcNamespace,
+					},
+				},
+			},
+		}
+	} else {
+		provisionRequest = controller.ProvisionOptions{
+			StorageClass: &storagev1.StorageClass{
+				ReclaimPolicy: &deletePolicy,
+				Parameters:    map[string]string{"csi.storage.k8s.io/fstype": "ext4"},
+				Provisioner:   driverName,
+			},
+			PVName: "new-pv-name",
+			PVC: &v1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "my-pvc",
+					Namespace:   srcNamespace,
+					UID:         "testid",
+					Annotations: driverNameAnnotation,
+				},
+				Spec: v1.PersistentVolumeClaimSpec{
+					Selector: nil,
+					Resources: v1.ResourceRequirements{
+						Requests: v1.ResourceList{
+							v1.ResourceName(v1.ResourceStorage): *resource.NewQuantity(requestedBytes, resource.BinarySI),
+						},
+					},
+					AccessModes: []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+					DataSourceRef: &v1.TypedObjectReference{
+						APIGroup: apiGroup,
+						Kind:     kind,
+						Name:     srcName,
+					},
+				},
+			},
+		}
+
+	}
+	if scName != "" {
+		provisionRequest.PVC.Spec.StorageClassName = &scName
+	}
+
+	switch volumeMode {
+	case "block":
+		provisionRequest.PVC.Spec.VolumeMode = &volumeModeBlock
+	case "filesystem":
+		provisionRequest.PVC.Spec.VolumeMode = &volumeModeFileSystem
+	default:
+		// leave it undefined/nil to maintaint the current defaults for test cases
+	}
+
+	return provisionRequest
+}
+
 // TestProvisionFromPVC tests create volume clone
 func TestProvisionFromPVC(t *testing.T) {
 	var requestedBytes int64 = 1000
@@ -4770,6 +4907,11 @@ func TestProvisionFromPVC(t *testing.T) {
 	wrongPVCName := "pv-bound-to-another-pvc-by-name"
 	wrongPVCNamespace := "pv-bound-to-another-pvc-by-namespace"
 	wrongPVCUID := "pv-bound-to-another-pvc-by-UID"
+	coreapiGrp := ""
+	//unsupportedAPIGrp := "unsupported.group.io"
+	unsupportedKind := "unsupportedKind"
+	ns1 := "ns1"
+	nonnamespace := ""
 
 	type pvSpec struct {
 		Name          string
@@ -4789,6 +4931,8 @@ func TestProvisionFromPVC(t *testing.T) {
 		expectFinalizers     bool                     // while set, expects clone protection finalizers to be set on a PVC
 		sourcePVStatusPhase  v1.PersistentVolumePhase // set to change source PV Status.Phase, default "Bound"
 		expectErr            bool                     // set to state, test is expected to return errors, default false
+		xnsEnabled           bool
+		refGrant             *gatewayv1beta1.ReferenceGrant
 	}{
 		"provision with pvc data source": {
 			clonePVName:      pvName,
@@ -4953,12 +5097,170 @@ func TestProvisionFromPVC(t *testing.T) {
 			expectFinalizers: true,
 			expectErr:        false,
 		},
+		"provision with pvc data source when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName:      pvName,
+			volOpts:          generatePVCForProvisionFromPVC(srcNamespace, srcName, fakeSc1, requestedBytes, ""),
+			expectFinalizers: true,
+			xnsEnabled:       true,
+			expectedPVSpec: &pvSpec{
+				Name:          pvName,
+				ReclaimPolicy: v1.PersistentVolumeReclaimDelete,
+				AccessModes:   []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+				Capacity: v1.ResourceList{
+					v1.ResourceName(v1.ResourceStorage): bytesToQuantity(requestedBytes),
+				},
+				CSIPVS: &v1.CSIPersistentVolumeSource{
+					Driver:       "test-driver",
+					VolumeHandle: "test-volume-id",
+					FSType:       "ext4",
+					VolumeAttributes: map[string]string{
+						"storage.kubernetes.io/csiProvisionerIdentity": "test-provisioner",
+					},
+				},
+			},
+		},
+		"provision with pvc data source different storage classes when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName:      pvName,
+			volOpts:          generatePVCForProvisionFromPVC(srcNamespace, srcName, fakeSc2, requestedBytes, ""),
+			expectFinalizers: true,
+			expectErr:        false,
+		},
+		"provision filesystem data source is filesystem when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName:      filesystemPVName,
+			volOpts:          generatePVCForProvisionFromPVC(srcNamespace, filesystemPVName, fakeSc1, requestedBytes, "filesystem"),
+			expectFinalizers: true,
+			expectErr:        false,
+		},
+		"provision nil mode data source is nil when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName:      pvName,
+			volOpts:          generatePVCForProvisionFromPVC(srcNamespace, srcName, fakeSc1, requestedBytes, ""),
+			expectFinalizers: true,
+			expectErr:        false,
+		},
+		"provision with xns PersitentVolumeClaim data source with refgrant when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName:      pvName,
+			volOpts:          generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
+			expectFinalizers: true,
+			xnsEnabled:       true,
+			refGrant:         newRefGrant("refGrant1", srcNamespace, ns1, coreapiGrp, "PersistentVolumeClaim"),
+			expectedPVSpec: &pvSpec{
+				Name:          pvName,
+				ReclaimPolicy: v1.PersistentVolumeReclaimDelete,
+				AccessModes:   []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+				Capacity: v1.ResourceList{
+					v1.ResourceName(v1.ResourceStorage): bytesToQuantity(requestedBytes),
+				},
+				CSIPVS: &v1.CSIPersistentVolumeSource{
+					Driver:       "test-driver",
+					VolumeHandle: "test-volume-id",
+					FSType:       "ext4",
+					VolumeAttributes: map[string]string{
+						"storage.kubernetes.io/csiProvisionerIdentity": "test-provisioner",
+					},
+				},
+			},
+		},
+		"provision with same ns PersitentVolumeClaim data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName:      pvName,
+			volOpts:          generatePVCForProvisionFromXnsPVC(srcNamespace, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
+			expectFinalizers: true,
+			xnsEnabled:       true,
+			expectedPVSpec: &pvSpec{
+				Name:          pvName,
+				ReclaimPolicy: v1.PersistentVolumeReclaimDelete,
+				AccessModes:   []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+				Capacity: v1.ResourceList{
+					v1.ResourceName(v1.ResourceStorage): bytesToQuantity(requestedBytes),
+				},
+				CSIPVS: &v1.CSIPersistentVolumeSource{
+					Driver:       "test-driver",
+					VolumeHandle: "test-volume-id",
+					FSType:       "ext4",
+					VolumeAttributes: map[string]string{
+						"storage.kubernetes.io/csiProvisionerIdentity": "test-provisioner",
+					},
+				},
+			},
+		},
+		"provision with non-ns PersitentVolumeClaim data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName:      pvName,
+			volOpts:          generatePVCForProvisionFromXnsPVC(srcNamespace, srcName, fakeSc1, "PersistentVolumeClaim", &nonnamespace, &coreapiGrp, requestedBytes, "", false),
+			expectFinalizers: true,
+			xnsEnabled:       true,
+			expectedPVSpec: &pvSpec{
+				Name:          pvName,
+				ReclaimPolicy: v1.PersistentVolumeReclaimDelete,
+				AccessModes:   []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+				Capacity: v1.ResourceList{
+					v1.ResourceName(v1.ResourceStorage): bytesToQuantity(requestedBytes),
+				},
+				CSIPVS: &v1.CSIPersistentVolumeSource{
+					Driver:       "test-driver",
+					VolumeHandle: "test-volume-id",
+					FSType:       "ext4",
+					VolumeAttributes: map[string]string{
+						"storage.kubernetes.io/csiProvisionerIdentity": "test-provisioner",
+					},
+				},
+			},
+		},
+		"provision with apiGroup nil and kind PersistentVolumeClaim xns PersitentVolumeClaim data source with refgrant when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName:      pvName,
+			volOpts:          generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, nil, requestedBytes, "", true),
+			expectFinalizers: true,
+			xnsEnabled:       true,
+			refGrant:         newRefGrant("refGrant1", srcNamespace, ns1, coreapiGrp, "PersistentVolumeClaim"),
+			expectedPVSpec: &pvSpec{
+				Name:          pvName,
+				ReclaimPolicy: v1.PersistentVolumeReclaimDelete,
+				AccessModes:   []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+				Capacity: v1.ResourceList{
+					v1.ResourceName(v1.ResourceStorage): bytesToQuantity(requestedBytes),
+				},
+				CSIPVS: &v1.CSIPersistentVolumeSource{
+					Driver:       "test-driver",
+					VolumeHandle: "test-volume-id",
+					FSType:       "ext4",
+					VolumeAttributes: map[string]string{
+						"storage.kubernetes.io/csiProvisionerIdentity": "test-provisioner",
+					},
+				},
+			},
+		},
+		"fail provision with apiGroup nil and unsupportedKind xns PersistentVolumeClaim PersitentVolumeClaim data source with refgrant when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName: pvName,
+			volOpts:     generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, unsupportedKind, &srcNamespace, nil, requestedBytes, "", true),
+			expectErr:   true,
+			xnsEnabled:  true,
+			refGrant:    newRefGrant("refGrant1", srcNamespace, ns1, coreapiGrp, "PersistentVolumeClaim"),
+		},
+		"fail provision with xns PersistentVolumeClaim PersitentVolumeClaim data source with Bad refgrant when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName: pvName,
+			volOpts:     generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
+			expectErr:   true,
+			xnsEnabled:  true,
+			refGrant:    newRefGrant("refGrant1", srcNamespace, srcNamespace, coreapiGrp, "PersistentVolumeClaim"),
+		},
+		"fail provision with xns PersistentVolumeClaim PersitentVolumeClaim data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName: pvName,
+			volOpts:     generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
+			expectErr:   true,
+			xnsEnabled:  true,
+		},
+		"fail provision with xns PersistentVolumeClaim PersitentVolumeClaim data source with refgrant when CrossNamespaceVolumeDataSource feature disabled": {
+			clonePVName: pvName,
+			volOpts:     generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
+			expectErr:   true,
+			refGrant:    newRefGrant("refGrant1", srcNamespace, ns1, coreapiGrp, "PersistentVolumeClaim"),
+		},
 	}
 
 	for k, tc := range testcases {
 		tc := tc
 		t.Run(k, func(t *testing.T) {
-			t.Parallel()
+			if !tc.xnsEnabled {
+				t.Parallel()
+			}
 			var clientSet *fakeclientset.Clientset
 
 			// Phase: setup mock server
@@ -5073,6 +5375,30 @@ func TestProvisionFromPVC(t *testing.T) {
 
 			clientSet = fakeclientset.NewSimpleClientset(claim, scNilClaim, pv, invalidClaim, filesystemClaim, blockClaim, unboundPV, anotherDriverPV, pvBoundToAnotherPVCUID, pvBoundToAnotherPVCNamespace, pvBoundToAnotherPVCName, lostClaim, pendingClaim, pvUsingFilesystemMode, blkModePV)
 
+			var refGrantLister referenceGrantv1beta1.ReferenceGrantLister
+			var stopChan chan struct{}
+			var gatewayClient *fakegateway.Clientset
+			if tc.refGrant != nil {
+				gatewayClient = fakegateway.NewSimpleClientset(tc.refGrant)
+			} else {
+				gatewayClient = fakegateway.NewSimpleClientset()
+			}
+			if tc.xnsEnabled {
+				gatewayFactory := gatewayInformers.NewSharedInformerFactory(gatewayClient, ResyncPeriodOfReferenceGrantInformer)
+				referenceGrants := gatewayFactory.Gateway().V1beta1().ReferenceGrants()
+				refGrantLister = referenceGrants.Lister()
+
+				stopChan := make(chan struct{})
+				gatewayFactory.Start(stopChan)
+				gatewayFactory.WaitForCacheSync(stopChan)
+			}
+			defer func() {
+				if stopChan != nil {
+					close(stopChan)
+				}
+			}()
+			defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.CrossNamespaceVolumeDataSource, tc.xnsEnabled)()
+
 			// Phase: setup responses based on test case parameters
 			out := &csi.CreateVolumeResponse{
 				Volume: &csi.Volume{
@@ -5085,11 +5411,28 @@ func TestProvisionFromPVC(t *testing.T) {
 			if tc.cloneUnsupported {
 				pluginCaps, controllerCaps = provisionCapabilities()
 			}
+			var volumeSource csi.VolumeContentSource_Volume
 			if !tc.expectErr {
-				volumeSource := csi.VolumeContentSource_Volume{
-					Volume: &csi.VolumeContentSource_VolumeSource{
-						VolumeId: tc.volOpts.PVC.Spec.DataSource.Name,
-					},
+				if tc.xnsEnabled {
+					if tc.volOpts.PVC.Spec.DataSourceRef != nil {
+						volumeSource = csi.VolumeContentSource_Volume{
+							Volume: &csi.VolumeContentSource_VolumeSource{
+								VolumeId: tc.volOpts.PVC.Spec.DataSourceRef.Name,
+							},
+						}
+					} else if tc.volOpts.PVC.Spec.DataSource != nil {
+						volumeSource = csi.VolumeContentSource_Volume{
+							Volume: &csi.VolumeContentSource_VolumeSource{
+								VolumeId: tc.volOpts.PVC.Spec.DataSource.Name,
+							},
+						}
+					}
+				} else {
+					volumeSource = csi.VolumeContentSource_Volume{
+						Volume: &csi.VolumeContentSource_VolumeSource{
+							VolumeId: tc.volOpts.PVC.Spec.DataSource.Name,
+						},
+					}
 				}
 				out.Volume.ContentSource = &csi.VolumeContentSource{
 					Type: &volumeSource,
@@ -5113,15 +5456,20 @@ func TestProvisionFromPVC(t *testing.T) {
 
 			// Phase: execute the test
 			csiProvisioner := NewCSIProvisioner(clientSet, 5*time.Second, "test-provisioner", "test", 5, csiConn.conn,
-				nil, driverName, pluginCaps, controllerCaps, "", false, true, csitrans.New(), nil, nil, nil, claimLister, nil, nil, false, defaultfsType, nil, true, false)
+				nil, driverName, pluginCaps, controllerCaps, "", false, true, csitrans.New(), nil, nil, nil, claimLister, nil, refGrantLister, false, defaultfsType, nil, true, false)
 
 			pv, _, err = csiProvisioner.Provision(context.Background(), tc.volOpts)
 			if tc.expectErr && err == nil {
 				t.Errorf("test %q: Expected error, got none", k)
 			}
 
-			if tc.volOpts.PVC.Spec.DataSource != nil {
-				claim, _ := claimLister.PersistentVolumeClaims(tc.volOpts.PVC.Namespace).Get(tc.volOpts.PVC.Spec.DataSource.Name)
+			if tc.volOpts.PVC.Spec.DataSourceRef != nil || tc.volOpts.PVC.Spec.DataSource != nil {
+				var claim *v1.PersistentVolumeClaim
+				if tc.volOpts.PVC.Spec.DataSourceRef != nil {
+					claim, _ = claimLister.PersistentVolumeClaims(tc.volOpts.PVC.Namespace).Get(tc.volOpts.PVC.Spec.DataSourceRef.Name)
+				} else if tc.volOpts.PVC.Spec.DataSource != nil {
+					claim, _ = claimLister.PersistentVolumeClaims(tc.volOpts.PVC.Namespace).Get(tc.volOpts.PVC.Spec.DataSource.Name)
+				}
 				if claim != nil {
 					set := checkFinalizer(claim, pvcCloneFinalizer)
 					if tc.expectFinalizers && !set {
@@ -5131,7 +5479,6 @@ func TestProvisionFromPVC(t *testing.T) {
 					}
 				}
 			}
-
 			// Phase: process test responses
 			// process responses
 			if !tc.expectErr && err != nil {
