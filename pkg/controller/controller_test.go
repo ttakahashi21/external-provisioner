@@ -4804,13 +4804,13 @@ func generatePVCForProvisionFromPVC(srcNamespace, srcName, scName string, reques
 }
 
 // generatePVCForProvisionFromPVC returns a ProvisionOptions with the requested settings
-func generatePVCForProvisionFromXnsPVC(srcNamespace, pvcNamespace, srcName, scName, apiGroup string, requestedBytes int64, volumeMode string) controller.ProvisionOptions {
+func generatePVCForProvisionFromXnsPVC(srcNamespace, srcName, scName, kind string, pvcNamespace, apiGroup *string, requestedBytes int64, volumeMode string) controller.ProvisionOptions {
 	deletePolicy := v1.PersistentVolumeReclaimDelete
 
 	provisionRequest := controller.ProvisionOptions{
 		StorageClass: &storagev1.StorageClass{
 			ReclaimPolicy: &deletePolicy,
-			Parameters:    map[string]string{"fstype": "ext4"},
+			Parameters:    map[string]string{"csi.storage.k8s.io/fstype": "ext4"},
 			Provisioner:   driverName,
 		},
 		PVName: "new-pv-name",
@@ -4830,10 +4830,10 @@ func generatePVCForProvisionFromXnsPVC(srcNamespace, pvcNamespace, srcName, scNa
 				},
 				AccessModes: []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
 				DataSourceRef: &v1.TypedObjectReference{
-					APIGroup:  &apiGroup,
-					Kind:      "PersistentVolumeClaim",
+					APIGroup:  apiGroup,
+					Kind:      kind,
 					Name:      srcName,
-					Namespace: &pvcNamespace,
+					Namespace: pvcNamespace,
 				},
 			},
 		},
@@ -4875,6 +4875,7 @@ func TestProvisionFromPVC(t *testing.T) {
 	wrongPVCUID := "pv-bound-to-another-pvc-by-UID"
 	coreapiGrp := ""
 	//unsupportedAPIGrp := "unsupported.group.io"
+	unsupportedKind := "unsupportedKind"
 	ns1 := "ns1"
 
 	type pvSpec struct {
@@ -4897,7 +4898,6 @@ func TestProvisionFromPVC(t *testing.T) {
 		expectErr            bool                     // set to state, test is expected to return errors, default false
 		xnsEnabled           bool
 		refGrant             *gatewayv1beta1.ReferenceGrant
-		pvcNamespace         string
 	}{
 		"provision with pvc data source": {
 			clonePVName:      pvName,
@@ -5062,13 +5062,12 @@ func TestProvisionFromPVC(t *testing.T) {
 			expectFinalizers: true,
 			expectErr:        false,
 		},
-		"test": {
+		"provision of PersistentVolumeClaims from PersitentVolumeClaim in other namespaces when CrossNamespaceVolumeDataSource feature enabled": {
 			clonePVName:      pvName,
-			volOpts:          generatePVCForProvisionFromXnsPVC(ns1, srcNamespace, srcName, fakeSc1, coreapiGrp, requestedBytes, ""),
+			volOpts:          generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, ""),
 			expectFinalizers: true,
 			xnsEnabled:       true,
 			refGrant:         newRefGrant("refGrant1", srcNamespace, ns1, coreapiGrp, "PersistentVolumeClaim"),
-			pvcNamespace:     ns1,
 			expectedPVSpec: &pvSpec{
 				Name:          pvName,
 				ReclaimPolicy: v1.PersistentVolumeReclaimDelete,
@@ -5086,13 +5085,85 @@ func TestProvisionFromPVC(t *testing.T) {
 				},
 			},
 		},
+		"provision of PersistentVolumeClaims from PersitentVolumeClaim in same namespace without RefereceGrant when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName:      pvName,
+			volOpts:          generatePVCForProvisionFromXnsPVC(srcNamespace, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, ""),
+			expectFinalizers: true,
+			xnsEnabled:       true,
+			expectedPVSpec: &pvSpec{
+				Name:          pvName,
+				ReclaimPolicy: v1.PersistentVolumeReclaimDelete,
+				AccessModes:   []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+				Capacity: v1.ResourceList{
+					v1.ResourceName(v1.ResourceStorage): bytesToQuantity(requestedBytes),
+				},
+				CSIPVS: &v1.CSIPersistentVolumeSource{
+					Driver:       "test-driver",
+					VolumeHandle: "test-volume-id",
+					FSType:       "ext4",
+					VolumeAttributes: map[string]string{
+						"storage.kubernetes.io/csiProvisionerIdentity": "test-provisioner",
+					},
+				},
+			},
+		},
+		"provision of PersistentVolumeClaims with apiGroup nil and kind PersistentVolumeClaim from PersitentVolumeClaim in other namespaces when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName:      pvName,
+			volOpts:          generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, nil, requestedBytes, ""),
+			expectFinalizers: true,
+			xnsEnabled:       true,
+			refGrant:         newRefGrant("refGrant1", srcNamespace, ns1, coreapiGrp, "PersistentVolumeClaim"),
+			expectedPVSpec: &pvSpec{
+				Name:          pvName,
+				ReclaimPolicy: v1.PersistentVolumeReclaimDelete,
+				AccessModes:   []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+				Capacity: v1.ResourceList{
+					v1.ResourceName(v1.ResourceStorage): bytesToQuantity(requestedBytes),
+				},
+				CSIPVS: &v1.CSIPersistentVolumeSource{
+					Driver:       "test-driver",
+					VolumeHandle: "test-volume-id",
+					FSType:       "ext4",
+					VolumeAttributes: map[string]string{
+						"storage.kubernetes.io/csiProvisionerIdentity": "test-provisioner",
+					},
+				},
+			},
+		},
+		"fail provision of PersistentVolumeClaims with apiGroup nil and unsupportedKind from PersitentVolumeClaim in other namespaces when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName: pvName,
+			volOpts:     generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, unsupportedKind, &srcNamespace, nil, requestedBytes, ""),
+			expectErr:   true,
+			xnsEnabled:  true,
+			refGrant:    newRefGrant("refGrant1", srcNamespace, ns1, coreapiGrp, "PersistentVolumeClaim"),
+		},
+		"fail provision of PersistentVolumeClaims from PersitentVolumeClaim in other namespaces with Bad RefereceGrant when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName: pvName,
+			volOpts:     generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, ""),
+			expectErr:   true,
+			xnsEnabled:  true,
+			refGrant:    newRefGrant("refGrant1", srcNamespace, srcNamespace, coreapiGrp, "PersistentVolumeClaim"),
+		},
+		"fail provision of PersistentVolumeClaims from PersitentVolumeClaim in other namespaces without RefereceGrant when CrossNamespaceVolumeDataSource feature enabled": {
+			clonePVName: pvName,
+			volOpts:     generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, ""),
+			expectErr:   true,
+			xnsEnabled:  true,
+		},
+		"fail provision of PersistentVolumeClaims from PersitentVolumeClaim in other namespaces with RefereceGrant when CrossNamespaceVolumeDataSource feature disabled": {
+			clonePVName: pvName,
+			volOpts:     generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, ""),
+			expectErr:   true,
+			refGrant:    newRefGrant("refGrant1", srcNamespace, ns1, coreapiGrp, "PersistentVolumeClaim"),
+		},
 	}
 
 	for k, tc := range testcases {
 		tc := tc
 		t.Run(k, func(t *testing.T) {
-			defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.CrossNamespaceVolumeDataSource, tc.xnsEnabled)()
-			//t.Parallel()
+			if !tc.xnsEnabled {
+				t.Parallel()
+			}
 			var clientSet *fakeclientset.Clientset
 
 			// Phase: setup mock server
@@ -5229,6 +5300,7 @@ func TestProvisionFromPVC(t *testing.T) {
 					close(stopChan)
 				}
 			}()
+			defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.CrossNamespaceVolumeDataSource, tc.xnsEnabled)()
 
 			// Phase: setup responses based on test case parameters
 			out := &csi.CreateVolumeResponse{
