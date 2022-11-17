@@ -1050,16 +1050,19 @@ func (p *csiProvisioner) getPVCSource(ctx context.Context, claim *v1.PersistentV
 
 	var sourcePVC *v1.PersistentVolumeClaim
 	var err error
+	var flagdataSouce, flagdataSouceRef bool
 
 	if claim.Spec.DataSourceRef != nil && claim.Spec.DataSourceRef.Namespace != nil && len(*claim.Spec.DataSourceRef.Namespace) > 0 {
 		if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
 			if claim.Namespace == *claim.Spec.DataSourceRef.Namespace {
 				sourcePVC, err = p.claimLister.PersistentVolumeClaims(claim.Namespace).Get(claim.Spec.DataSource.Name)
+				flagdataSouce = true
 			} else {
 				if ok, err := p.IsGranted(ctx, claim); err != nil || !ok {
-					return nil, fmt.Errorf("accessing snapshot %s/%s from %s/%s isn't allowed", *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Namespace, claim.Name)
+					return nil, fmt.Errorf("accessing volume %s/%s from %s/%s isn't allowed", *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Namespace, claim.Name)
 				}
 				sourcePVC, err = p.claimLister.PersistentVolumeClaims(*claim.Spec.DataSourceRef.Namespace).Get(claim.Spec.DataSourceRef.Name)
+				flagdataSouceRef = true
 			}
 		} else {
 			return nil, fmt.Errorf("error handling for DataSourceRef Type %s with non-empty namespace by Name %s: CrossNamespaceVolumeDataSource feature disabled", claim.Spec.DataSourceRef.Kind, claim.Spec.DataSourceRef.Name)
@@ -1067,16 +1070,31 @@ func (p *csiProvisioner) getPVCSource(ctx context.Context, claim *v1.PersistentV
 
 	} else {
 		sourcePVC, err = p.claimLister.PersistentVolumeClaims(claim.Namespace).Get(claim.Spec.DataSource.Name)
+		flagdataSouce = true
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("error getting PVC %s (namespace %q) from api server: %v", claim.Spec.DataSource.Name, claim.Namespace, err)
+	if flagdataSouce {
+		if err != nil {
+			return nil, fmt.Errorf("error getting PVC %s (namespace %q) from api server: %v", claim.Spec.DataSource.Name, claim.Namespace, err)
+		}
+		if string(sourcePVC.Status.Phase) != "Bound" {
+			return nil, fmt.Errorf("the PVC DataSource %s must have a status of Bound.  Got %v", claim.Spec.DataSource.Name, sourcePVC.Status)
+		}
+		if sourcePVC.ObjectMeta.DeletionTimestamp != nil {
+			return nil, fmt.Errorf("the PVC DataSource %s is currently being deleted", claim.Spec.DataSource.Name)
+		}
 	}
-	if string(sourcePVC.Status.Phase) != "Bound" {
-		return nil, fmt.Errorf("the PVC DataSource %s must have a status of Bound.  Got %v", claim.Spec.DataSource.Name, sourcePVC.Status)
-	}
-	if sourcePVC.ObjectMeta.DeletionTimestamp != nil {
-		return nil, fmt.Errorf("the PVC DataSource %s is currently being deleted", claim.Spec.DataSource.Name)
+
+	if flagdataSouceRef {
+		if err != nil {
+			return nil, fmt.Errorf("error getting PVC %s (namespace %q) from api server: %v", claim.Spec.DataSourceRef.Name, claim.Namespace, err)
+		}
+		if string(sourcePVC.Status.Phase) != "Bound" {
+			return nil, fmt.Errorf("the PVC DataSource %s must have a status of Bound.  Got %v", claim.Spec.DataSourceRef.Name, sourcePVC.Status)
+		}
+		if sourcePVC.ObjectMeta.DeletionTimestamp != nil {
+			return nil, fmt.Errorf("the PVC DataSource %s is currently being deleted", claim.Spec.DataSourceRef.Name)
+		}
 	}
 
 	if sourcePVC.Spec.StorageClassName == nil {
