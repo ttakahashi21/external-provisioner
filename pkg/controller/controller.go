@@ -594,9 +594,8 @@ func (p *csiProvisioner) prepareProvision(ctx context.Context, claim *v1.Persist
 			}
 		}
 	}
-
 	if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
-		if claim.Spec.DataSourceRef != nil && claim.Spec.DataSourceRef.Namespace != nil && len(*claim.Spec.DataSourceRef.Namespace) > 0 {
+		if claim.Spec.DataSourceRef != nil {
 			switch claim.Spec.DataSourceRef.Kind {
 			case snapshotKind:
 				if *(claim.Spec.DataSourceRef.APIGroup) != snapshotAPIGroup {
@@ -969,7 +968,12 @@ func (p *csiProvisioner) setCloneFinalizer(ctx context.Context, pvc *v1.Persiste
 	var err error
 
 	if pvc.Spec.DataSourceRef != nil {
-		claim, err = p.claimLister.PersistentVolumeClaims(*pvc.Spec.DataSourceRef.Namespace).Get(pvc.Spec.DataSourceRef.Name)
+		if pvc.Spec.DataSourceRef.Namespace != nil {
+			claim, err = p.claimLister.PersistentVolumeClaims(*pvc.Spec.DataSourceRef.Namespace).Get(pvc.Spec.DataSourceRef.Name)
+		} else {
+			claim, err = p.claimLister.PersistentVolumeClaims(pvc.Namespace).Get(pvc.Spec.DataSourceRef.Name)
+		}
+
 	} else if pvc.Spec.DataSource != nil {
 		claim, err = p.claimLister.PersistentVolumeClaims(pvc.Namespace).Get(pvc.Spec.DataSource.Name)
 	}
@@ -1057,27 +1061,30 @@ func (p *csiProvisioner) getPVCSource(ctx context.Context, claim *v1.PersistentV
 
 	var sourcePVC *v1.PersistentVolumeClaim
 	var err error
-
-	if claim.Spec.DataSourceRef != nil && claim.Spec.DataSourceRef.Namespace != nil && len(*claim.Spec.DataSourceRef.Namespace) > 0 {
-		if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
-			if claim.Namespace != *claim.Spec.DataSourceRef.Namespace {
-				if ok, err := p.IsGranted(ctx, claim); err != nil || !ok {
-					return nil, fmt.Errorf("accessing volume %s/%s from %s/%s isn't allowed", *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Namespace, claim.Name)
+	if claim.Spec.DataSourceRef != nil {
+		if claim.Spec.DataSourceRef.Namespace != nil && len(*claim.Spec.DataSourceRef.Namespace) > 0 {
+			if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
+				if claim.Namespace != *claim.Spec.DataSourceRef.Namespace {
+					if ok, err := p.IsGranted(ctx, claim); err != nil || !ok {
+						return nil, fmt.Errorf("accessing volume %s/%s from %s/%s isn't allowed", *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Namespace, claim.Name)
+					}
 				}
-			}
-			sourcePVC, err = p.claimLister.PersistentVolumeClaims(*claim.Spec.DataSourceRef.Namespace).Get(claim.Spec.DataSourceRef.Name)
-			fmt.Printf("sourcePVC: %s\n", sourcePVC)
-			if err != nil {
-				return nil, fmt.Errorf("error getting PVC %s (namespace %q) from api server: %v", claim.Spec.DataSourceRef.Name, claim.Namespace, err)
-			}
-			if string(sourcePVC.Status.Phase) != "Bound" {
-				return nil, fmt.Errorf("the PVC DataSource %s must have a status of Bound.  Got %v", claim.Spec.DataSourceRef.Name, sourcePVC.Status)
-			}
-			if sourcePVC.ObjectMeta.DeletionTimestamp != nil {
-				return nil, fmt.Errorf("the PVC DataSource %s is currently being deleted", claim.Spec.DataSourceRef.Name)
+				sourcePVC, err = p.claimLister.PersistentVolumeClaims(*claim.Spec.DataSourceRef.Namespace).Get(claim.Spec.DataSourceRef.Name)
+
+			} else {
+				return nil, fmt.Errorf("error handling for DataSourceRef Type %s with non-empty namespace by Name %s: CrossNamespaceVolumeDataSource feature disabled", claim.Spec.DataSourceRef.Kind, claim.Spec.DataSourceRef.Name)
 			}
 		} else {
-			return nil, fmt.Errorf("error handling for DataSourceRef Type %s with non-empty namespace by Name %s: CrossNamespaceVolumeDataSource feature disabled", claim.Spec.DataSourceRef.Kind, claim.Spec.DataSourceRef.Name)
+			sourcePVC, err = p.claimLister.PersistentVolumeClaims(claim.Namespace).Get(claim.Spec.DataSourceRef.Name)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("error getting PVC %s (namespace %q) from api server: %v", claim.Spec.DataSourceRef.Name, claim.Namespace, err)
+		}
+		if string(sourcePVC.Status.Phase) != "Bound" {
+			return nil, fmt.Errorf("the PVC DataSource %s must have a status of Bound.  Got %v", claim.Spec.DataSourceRef.Name, sourcePVC.Status)
+		}
+		if sourcePVC.ObjectMeta.DeletionTimestamp != nil {
+			return nil, fmt.Errorf("the PVC DataSource %s is currently being deleted", claim.Spec.DataSourceRef.Name)
 		}
 	} else {
 		sourcePVC, err = p.claimLister.PersistentVolumeClaims(claim.Namespace).Get(claim.Spec.DataSource.Name)
@@ -1165,7 +1172,6 @@ func (p *csiProvisioner) getPVCSource(ctx context.Context, claim *v1.PersistentV
 	volumeContentSource := &csi.VolumeContentSource{
 		Type: &volumeSource,
 	}
-	fmt.Printf("volumeSource: %s\n", volumeSource)
 	return volumeContentSource, nil
 }
 
@@ -1220,16 +1226,20 @@ func (p *csiProvisioner) IsGranted(ctx context.Context, claim *v1.PersistentVolu
 // getSnapshotSource verifies DataSource.Kind of type VolumeSnapshot, making sure that the requested Snapshot is available/ready
 // returns the VolumeContentSource for the requested snapshot
 func (p *csiProvisioner) getSnapshotSource(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass) (*csi.VolumeContentSource, error) {
-	if claim.Spec.DataSourceRef != nil && claim.Spec.DataSourceRef.Namespace != nil && len(*claim.Spec.DataSourceRef.Namespace) > 0 {
-		if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
-			if claim.Namespace != *claim.Spec.DataSourceRef.Namespace {
-				if ok, err := p.IsGranted(ctx, claim); err != nil || !ok {
-					return nil, fmt.Errorf("accessing snapshot %s/%s from %s/%s isn't allowed", *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Namespace, claim.Name)
+	if claim.Spec.DataSourceRef != nil {
+		if claim.Spec.DataSourceRef.Namespace != nil && len(*claim.Spec.DataSourceRef.Namespace) > 0 {
+			if utilfeature.DefaultFeatureGate.Enabled(features.CrossNamespaceVolumeDataSource) {
+				if claim.Namespace != *claim.Spec.DataSourceRef.Namespace {
+					if ok, err := p.IsGranted(ctx, claim); err != nil || !ok {
+						return nil, fmt.Errorf("accessing snapshot %s/%s from %s/%s isn't allowed", *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Namespace, claim.Name)
+					}
 				}
+				return p.getSnapshotSourceInternal(ctx, claim, sc, *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name)
+			} else {
+				return nil, fmt.Errorf("error handling for DataSourceRef Type %s with non-empty namespace by Name %s: CrossNamespaceVolumeDataSource feature disabled", claim.Spec.DataSourceRef.Kind, claim.Spec.DataSourceRef.Name)
 			}
-			return p.getSnapshotSourceInternal(ctx, claim, sc, *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name)
 		} else {
-			return nil, fmt.Errorf("error handling for DataSourceRef Type %s with non-empty namespace by Name %s: CrossNamespaceVolumeDataSource feature disabled", claim.Spec.DataSourceRef.Kind, claim.Spec.DataSourceRef.Name)
+			return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Namespace, claim.Spec.DataSourceRef.Name)
 		}
 	} else {
 		return p.getSnapshotSourceInternal(ctx, claim, sc, claim.Namespace, claim.Spec.DataSource.Name)
