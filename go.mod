@@ -29,6 +29,9 @@ require (
 	sigs.k8s.io/sig-storage-lib-external-provisioner/v8 v8.0.0
 )
 
+//TODO: Because there is no tag containing ReferenceGrant beta.
+require sigs.k8s.io/gateway-api v0.5.1-0.20221110191515-2d586cc49ab4
+
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
