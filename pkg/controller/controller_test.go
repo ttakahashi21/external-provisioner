@@ -3569,7 +3569,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 			refGrant:            newRefGrant("refGrant1", ns1, ns2, apiGrp, "VolumeSnapshot"),
 			snapNamespace:       ns1,
 		},
-		"fail provision with xns volume snapshot data source with bad refgrant when CrossNamespaceVolumeDataSource feature enabled": {
+		"fail provision with xns volume snapshot data source with bad API Group refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			volOpts: controller.ProvisionOptions{
 				StorageClass: &storagev1.StorageClass{
 					ReclaimPolicy: &deletePolicy,
@@ -3603,7 +3603,44 @@ func TestProvisionFromSnapshot(t *testing.T) {
 			snapshotStatusReady: true,
 			expectErr:           true,
 			xnsEnabled:          true,
-			refGrant:            newRefGrant("refGrant1", "badnamespace", ns2, apiGrp, "VolumeSnapshot"),
+			refGrant:            newRefGrant("refGrant1", ns1, ns2, apiGrp, "PersistentVolumeClaim"),
+			snapNamespace:       ns1,
+		},
+		"fail provision with xns volume snapshot data source with bad namespace refgrant when CrossNamespaceVolumeDataSource feature enabled": {
+			volOpts: controller.ProvisionOptions{
+				StorageClass: &storagev1.StorageClass{
+					ReclaimPolicy: &deletePolicy,
+					Parameters:    map[string]string{},
+					Provisioner:   "test-driver",
+				},
+				PVName: "test-name",
+				PVC: &v1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						UID:         "testid",
+						Annotations: driverNameAnnotation,
+						Namespace:   ns2,
+					},
+					Spec: v1.PersistentVolumeClaimSpec{
+						StorageClassName: &snapClassName,
+						Resources: v1.ResourceRequirements{
+							Requests: v1.ResourceList{
+								v1.ResourceName(v1.ResourceStorage): resource.MustParse(strconv.FormatInt(requestedBytes, 10)),
+							},
+						},
+						AccessModes: []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+						DataSourceRef: &v1.TypedObjectReference{
+							Name:      snapName,
+							Kind:      "VolumeSnapshot",
+							APIGroup:  &apiGrp,
+							Namespace: &ns1,
+						},
+					},
+				},
+			},
+			snapshotStatusReady: true,
+			expectErr:           true,
+			xnsEnabled:          true,
+			refGrant:            newRefGrant("refGrant1", ns1, "badnamespace", "", "PersistentVolumeClaim"),
 			snapNamespace:       ns1,
 		},
 	}
