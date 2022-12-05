@@ -2663,18 +2663,18 @@ func newContent(name, namespace, className, snapshotHandle, volumeUID, volumeNam
 }
 
 // newRefGrant returns a new ReferenceGrant with given attributes
-func newRefGrant(name, namespace, fromNamespace, toGroup, toKind string) *gatewayv1beta1.ReferenceGrant {
+func newRefGrant(name, fromNamespace, toNamespace, toGroup, toKind string) *gatewayv1beta1.ReferenceGrant {
 	return &gatewayv1beta1.ReferenceGrant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: namespace,
+			Namespace: fromNamespace,
 		},
 		Spec: gatewayv1beta1.ReferenceGrantSpec{
 			From: []gatewayv1beta1.ReferenceGrantFrom{
 				{
 					Group:     gatewayv1beta1.Group(""),
 					Kind:      gatewayv1beta1.Kind("PersistentVolumeClaim"),
-					Namespace: gatewayv1beta1.Namespace(fromNamespace),
+					Namespace: gatewayv1beta1.Namespace(toNamespace),
 				},
 			},
 			To: []gatewayv1beta1.ReferenceGrantTo{
@@ -2699,9 +2699,8 @@ func TestProvisionFromSnapshot(t *testing.T) {
 		Time: time.Unix(0, timeNow),
 	}
 	deletePolicy := v1.PersistentVolumeReclaimDelete
-	ns1 := "ns1"
-	ns2 := "ns2"
-
+	fromNamespace := "ns1"
+	toNamespace := "ns2"
 	type pvSpec struct {
 		Name          string
 		ReclaimPolicy v1.PersistentVolumeReclaimPolicy
@@ -3353,7 +3352,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						UID:         "testid",
 						Annotations: driverNameAnnotation,
-						Namespace:   ns2,
+						Namespace:   toNamespace,
 					},
 					Spec: v1.PersistentVolumeClaimSpec{
 						StorageClassName: &snapClassName,
@@ -3367,7 +3366,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 							Name:      snapName,
 							Kind:      "VolumeSnapshot",
 							APIGroup:  &apiGrp,
-							Namespace: &ns1,
+							Namespace: &fromNamespace,
 						},
 					},
 				},
@@ -3391,8 +3390,8 @@ func TestProvisionFromSnapshot(t *testing.T) {
 			},
 			expectCSICall: true,
 			xnsEnabled:    true,
-			snapNamespace: ns1,
-			refGrant:      newRefGrant("refGrant1", ns1, ns2, apiGrp, "VolumeSnapshot"),
+			snapNamespace: fromNamespace,
+			refGrant:      newRefGrant("refGrant1", fromNamespace, toNamespace, apiGrp, "VolumeSnapshot"),
 		},
 		"provision with same ns volume snapshot data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			volOpts: controller.ProvisionOptions{
@@ -3406,7 +3405,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						UID:         "testid",
 						Annotations: driverNameAnnotation,
-						Namespace:   ns1,
+						Namespace:   fromNamespace,
 					},
 					Spec: v1.PersistentVolumeClaimSpec{
 						StorageClassName: &snapClassName,
@@ -3420,7 +3419,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 							Name:      snapName,
 							Kind:      "VolumeSnapshot",
 							APIGroup:  &apiGrp,
-							Namespace: &ns1,
+							Namespace: &fromNamespace,
 						},
 					},
 				},
@@ -3444,7 +3443,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 			},
 			expectCSICall: true,
 			xnsEnabled:    true,
-			snapNamespace: ns1,
+			snapNamespace: fromNamespace,
 		},
 		"provision with non-ns volume snapshot data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			volOpts: controller.ProvisionOptions{
@@ -3458,7 +3457,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						UID:         "testid",
 						Annotations: driverNameAnnotation,
-						Namespace:   ns1,
+						Namespace:   fromNamespace,
 					},
 					Spec: v1.PersistentVolumeClaimSpec{
 						StorageClassName: &snapClassName,
@@ -3495,7 +3494,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 			},
 			expectCSICall: true,
 			xnsEnabled:    true,
-			snapNamespace: ns1,
+			snapNamespace: fromNamespace,
 		},
 		"fail provision with xns volume snapshot data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			volOpts: controller.ProvisionOptions{
@@ -3509,7 +3508,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						UID:         "testid",
 						Annotations: driverNameAnnotation,
-						Namespace:   ns2,
+						Namespace:   toNamespace,
 					},
 					Spec: v1.PersistentVolumeClaimSpec{
 						StorageClassName: &snapClassName,
@@ -3523,7 +3522,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 							Name:      snapName,
 							Kind:      "VolumeSnapshot",
 							APIGroup:  &apiGrp,
-							Namespace: &ns1,
+							Namespace: &fromNamespace,
 						},
 					},
 				},
@@ -3531,7 +3530,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 			snapshotStatusReady: true,
 			expectErr:           true,
 			xnsEnabled:          true,
-			snapNamespace:       ns1,
+			snapNamespace:       fromNamespace,
 		},
 		"fail provision with xns volume snapshot data source with refgrant when CrossNamespaceVolumeDataSource feature disabled": {
 			volOpts: controller.ProvisionOptions{
@@ -3545,7 +3544,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						UID:         "testid",
 						Annotations: driverNameAnnotation,
-						Namespace:   ns2,
+						Namespace:   toNamespace,
 					},
 					Spec: v1.PersistentVolumeClaimSpec{
 						StorageClassName: &snapClassName,
@@ -3559,15 +3558,15 @@ func TestProvisionFromSnapshot(t *testing.T) {
 							Name:      snapName,
 							Kind:      "VolumeSnapshot",
 							APIGroup:  &apiGrp,
-							Namespace: &ns1,
+							Namespace: &fromNamespace,
 						},
 					},
 				},
 			},
 			snapshotStatusReady: true,
 			expectErr:           true,
-			refGrant:            newRefGrant("refGrant1", ns1, ns2, apiGrp, "VolumeSnapshot"),
-			snapNamespace:       ns1,
+			refGrant:            newRefGrant("refGrant1", fromNamespace, toNamespace, apiGrp, "VolumeSnapshot"),
+			snapNamespace:       fromNamespace,
 		},
 		"fail provision with xns volume snapshot data source with bad API Group refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			volOpts: controller.ProvisionOptions{
@@ -3581,7 +3580,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						UID:         "testid",
 						Annotations: driverNameAnnotation,
-						Namespace:   ns2,
+						Namespace:   toNamespace,
 					},
 					Spec: v1.PersistentVolumeClaimSpec{
 						StorageClassName: &snapClassName,
@@ -3595,7 +3594,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 							Name:      snapName,
 							Kind:      "VolumeSnapshot",
 							APIGroup:  &apiGrp,
-							Namespace: &ns1,
+							Namespace: &fromNamespace,
 						},
 					},
 				},
@@ -3603,8 +3602,8 @@ func TestProvisionFromSnapshot(t *testing.T) {
 			snapshotStatusReady: true,
 			expectErr:           true,
 			xnsEnabled:          true,
-			refGrant:            newRefGrant("refGrant1", ns1, ns2, apiGrp, "PersistentVolumeClaim"),
-			snapNamespace:       ns1,
+			refGrant:            newRefGrant("refGrant1", fromNamespace, toNamespace, apiGrp, "PersistentVolumeClaim"),
+			snapNamespace:       fromNamespace,
 		},
 		"fail provision with xns volume snapshot data source with bad namespace refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			volOpts: controller.ProvisionOptions{
@@ -3618,7 +3617,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						UID:         "testid",
 						Annotations: driverNameAnnotation,
-						Namespace:   ns2,
+						Namespace:   toNamespace,
 					},
 					Spec: v1.PersistentVolumeClaimSpec{
 						StorageClassName: &snapClassName,
@@ -3632,7 +3631,7 @@ func TestProvisionFromSnapshot(t *testing.T) {
 							Name:      snapName,
 							Kind:      "VolumeSnapshot",
 							APIGroup:  &apiGrp,
-							Namespace: &ns1,
+							Namespace: &fromNamespace,
 						},
 					},
 				},
@@ -3640,8 +3639,8 @@ func TestProvisionFromSnapshot(t *testing.T) {
 			snapshotStatusReady: true,
 			expectErr:           true,
 			xnsEnabled:          true,
-			refGrant:            newRefGrant("refGrant1", ns1, "badnamespace", "", "PersistentVolumeClaim"),
-			snapNamespace:       ns1,
+			refGrant:            newRefGrant("refGrant1", fromNamespace, "badnamespace", apiGrp, "VolumeSnapshot"),
+			snapNamespace:       fromNamespace,
 		},
 	}
 
@@ -4840,78 +4839,47 @@ func generatePVCForProvisionFromPVC(srcNamespace, srcName, scName string, reques
 	return provisionRequest
 }
 
-// generatePVCForProvisionFromPVC returns a ProvisionOptions with the requested settings
-func generatePVCForProvisionFromXnsPVC(srcNamespace, srcName, scName, kind string, refpvcNamespace, apiGroup *string, requestedBytes int64, volumeMode string, setnamespace bool) controller.ProvisionOptions {
+// generatePVCForProvisionFromXnsdataSource returns a ProvisionOptions with the requested settings
+func generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, fromscName, fromkind string, fromNamespace, fromapiGroup *string, requestedBytes int64, volumeMode string, setnamespace bool) controller.ProvisionOptions {
 	deletePolicy := v1.PersistentVolumeReclaimDelete
 
-	var provisionRequest controller.ProvisionOptions
-	if setnamespace {
-		provisionRequest = controller.ProvisionOptions{
-			StorageClass: &storagev1.StorageClass{
-				ReclaimPolicy: &deletePolicy,
-				Parameters:    map[string]string{"csi.storage.k8s.io/fstype": "ext4"},
-				Provisioner:   driverName,
+	provisionRequest := controller.ProvisionOptions{
+		StorageClass: &storagev1.StorageClass{
+			ReclaimPolicy: &deletePolicy,
+			Parameters:    map[string]string{"csi.storage.k8s.io/fstype": "ext4"},
+			Provisioner:   driverName,
+		},
+		PVName: "new-pv-name",
+		PVC: &v1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "my-pvc",
+				Namespace:   toNamespace,
+				UID:         "testid",
+				Annotations: driverNameAnnotation,
 			},
-			PVName: "new-pv-name",
-			PVC: &v1.PersistentVolumeClaim{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:        "my-pvc",
-					Namespace:   srcNamespace,
-					UID:         "testid",
-					Annotations: driverNameAnnotation,
-				},
-				Spec: v1.PersistentVolumeClaimSpec{
-					Selector: nil,
-					Resources: v1.ResourceRequirements{
-						Requests: v1.ResourceList{
-							v1.ResourceName(v1.ResourceStorage): *resource.NewQuantity(requestedBytes, resource.BinarySI),
-						},
-					},
-					AccessModes: []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
-					DataSourceRef: &v1.TypedObjectReference{
-						APIGroup:  apiGroup,
-						Kind:      kind,
-						Name:      srcName,
-						Namespace: refpvcNamespace,
+			Spec: v1.PersistentVolumeClaimSpec{
+				Selector: nil,
+				Resources: v1.ResourceRequirements{
+					Requests: v1.ResourceList{
+						v1.ResourceName(v1.ResourceStorage): *resource.NewQuantity(requestedBytes, resource.BinarySI),
 					},
 				},
-			},
-		}
-	} else {
-		provisionRequest = controller.ProvisionOptions{
-			StorageClass: &storagev1.StorageClass{
-				ReclaimPolicy: &deletePolicy,
-				Parameters:    map[string]string{"csi.storage.k8s.io/fstype": "ext4"},
-				Provisioner:   driverName,
-			},
-			PVName: "new-pv-name",
-			PVC: &v1.PersistentVolumeClaim{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:        "my-pvc",
-					Namespace:   srcNamespace,
-					UID:         "testid",
-					Annotations: driverNameAnnotation,
-				},
-				Spec: v1.PersistentVolumeClaimSpec{
-					Selector: nil,
-					Resources: v1.ResourceRequirements{
-						Requests: v1.ResourceList{
-							v1.ResourceName(v1.ResourceStorage): *resource.NewQuantity(requestedBytes, resource.BinarySI),
-						},
-					},
-					AccessModes: []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
-					DataSourceRef: &v1.TypedObjectReference{
-						APIGroup: apiGroup,
-						Kind:     kind,
-						Name:     srcName,
-					},
+				AccessModes: []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+				DataSourceRef: &v1.TypedObjectReference{
+					APIGroup: fromapiGroup,
+					Kind:     fromkind,
+					Name:     fromsrcName,
 				},
 			},
-		}
-
+		},
 	}
-	if scName != "" {
-		provisionRequest.PVC.Spec.StorageClassName = &scName
+
+	if setnamespace {
+		provisionRequest.PVC.Spec.DataSourceRef.Namespace = fromNamespace
+	}
+
+	if fromscName != "" {
+		provisionRequest.PVC.Spec.StorageClassName = &fromscName
 	}
 
 	switch volumeMode {
@@ -4945,10 +4913,8 @@ func TestProvisionFromPVC(t *testing.T) {
 	wrongPVCNamespace := "pv-bound-to-another-pvc-by-namespace"
 	wrongPVCUID := "pv-bound-to-another-pvc-by-UID"
 	coreapiGrp := ""
-	//unsupportedAPIGrp := "unsupported.group.io"
 	unsupportedKind := "unsupportedKind"
 	ns1 := "ns1"
-	nonnamespace := ""
 
 	type pvSpec struct {
 		Name          string
@@ -5176,7 +5142,7 @@ func TestProvisionFromPVC(t *testing.T) {
 		},
 		"provision with xns PersitentVolumeClaim data source with refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			clonePVName:      pvName,
-			volOpts:          generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
+			volOpts:          generatePVCForProvisionFromXnsdataSource(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
 			expectFinalizers: true,
 			xnsEnabled:       true,
 			refGrant:         newRefGrant("refGrant1", srcNamespace, ns1, coreapiGrp, "PersistentVolumeClaim"),
@@ -5199,7 +5165,7 @@ func TestProvisionFromPVC(t *testing.T) {
 		},
 		"provision with same ns PersitentVolumeClaim data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			clonePVName:      pvName,
-			volOpts:          generatePVCForProvisionFromXnsPVC(srcNamespace, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
+			volOpts:          generatePVCForProvisionFromXnsdataSource(srcNamespace, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
 			expectFinalizers: true,
 			xnsEnabled:       true,
 			expectedPVSpec: &pvSpec{
@@ -5221,7 +5187,7 @@ func TestProvisionFromPVC(t *testing.T) {
 		},
 		"provision with non-ns PersitentVolumeClaim data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			clonePVName:      pvName,
-			volOpts:          generatePVCForProvisionFromXnsPVC(srcNamespace, srcName, fakeSc1, "PersistentVolumeClaim", &nonnamespace, &coreapiGrp, requestedBytes, "", false),
+			volOpts:          generatePVCForProvisionFromXnsdataSource(srcNamespace, srcName, fakeSc1, "PersistentVolumeClaim", nil, &coreapiGrp, requestedBytes, "", false),
 			expectFinalizers: true,
 			xnsEnabled:       true,
 			expectedPVSpec: &pvSpec{
@@ -5243,7 +5209,7 @@ func TestProvisionFromPVC(t *testing.T) {
 		},
 		"provision with apiGroup nil and kind PersistentVolumeClaim xns PersitentVolumeClaim data source with refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			clonePVName:      pvName,
-			volOpts:          generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, nil, requestedBytes, "", true),
+			volOpts:          generatePVCForProvisionFromXnsdataSource(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, nil, requestedBytes, "", true),
 			expectFinalizers: true,
 			xnsEnabled:       true,
 			refGrant:         newRefGrant("refGrant1", srcNamespace, ns1, coreapiGrp, "PersistentVolumeClaim"),
@@ -5266,27 +5232,27 @@ func TestProvisionFromPVC(t *testing.T) {
 		},
 		"fail provision with apiGroup nil and unsupportedKind xns PersistentVolumeClaim PersitentVolumeClaim data source with refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			clonePVName: pvName,
-			volOpts:     generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, unsupportedKind, &srcNamespace, nil, requestedBytes, "", true),
+			volOpts:     generatePVCForProvisionFromXnsdataSource(ns1, srcName, fakeSc1, unsupportedKind, &srcNamespace, nil, requestedBytes, "", true),
 			expectErr:   true,
 			xnsEnabled:  true,
 			refGrant:    newRefGrant("refGrant1", srcNamespace, ns1, coreapiGrp, "PersistentVolumeClaim"),
 		},
 		"fail provision with xns PersistentVolumeClaim PersitentVolumeClaim data source with Bad refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			clonePVName: pvName,
-			volOpts:     generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
+			volOpts:     generatePVCForProvisionFromXnsdataSource(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
 			expectErr:   true,
 			xnsEnabled:  true,
 			refGrant:    newRefGrant("refGrant1", srcNamespace, srcNamespace, coreapiGrp, "PersistentVolumeClaim"),
 		},
 		"fail provision with xns PersistentVolumeClaim PersitentVolumeClaim data source without refgrant when CrossNamespaceVolumeDataSource feature enabled": {
 			clonePVName: pvName,
-			volOpts:     generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
+			volOpts:     generatePVCForProvisionFromXnsdataSource(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
 			expectErr:   true,
 			xnsEnabled:  true,
 		},
 		"fail provision with xns PersistentVolumeClaim PersitentVolumeClaim data source with refgrant when CrossNamespaceVolumeDataSource feature disabled": {
 			clonePVName: pvName,
-			volOpts:     generatePVCForProvisionFromXnsPVC(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
+			volOpts:     generatePVCForProvisionFromXnsdataSource(ns1, srcName, fakeSc1, "PersistentVolumeClaim", &srcNamespace, &coreapiGrp, requestedBytes, "", true),
 			expectErr:   true,
 			refGrant:    newRefGrant("refGrant1", srcNamespace, ns1, coreapiGrp, "PersistentVolumeClaim"),
 		},
@@ -5450,21 +5416,13 @@ func TestProvisionFromPVC(t *testing.T) {
 			}
 			var volumeSource csi.VolumeContentSource_Volume
 			if !tc.expectErr {
-				if tc.xnsEnabled {
-					if tc.volOpts.PVC.Spec.DataSourceRef != nil {
-						volumeSource = csi.VolumeContentSource_Volume{
-							Volume: &csi.VolumeContentSource_VolumeSource{
-								VolumeId: tc.volOpts.PVC.Spec.DataSourceRef.Name,
-							},
-						}
-					} else if tc.volOpts.PVC.Spec.DataSource != nil {
-						volumeSource = csi.VolumeContentSource_Volume{
-							Volume: &csi.VolumeContentSource_VolumeSource{
-								VolumeId: tc.volOpts.PVC.Spec.DataSource.Name,
-							},
-						}
+				if tc.xnsEnabled && tc.volOpts.PVC.Spec.DataSourceRef != nil {
+					volumeSource = csi.VolumeContentSource_Volume{
+						Volume: &csi.VolumeContentSource_VolumeSource{
+							VolumeId: tc.volOpts.PVC.Spec.DataSourceRef.Name,
+						},
 					}
-				} else {
+				} else if tc.volOpts.PVC.Spec.DataSource != nil {
 					volumeSource = csi.VolumeContentSource_Volume{
 						Volume: &csi.VolumeContentSource_VolumeSource{
 							VolumeId: tc.volOpts.PVC.Spec.DataSource.Name,
