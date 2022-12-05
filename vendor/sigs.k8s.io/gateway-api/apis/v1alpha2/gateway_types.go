@@ -60,10 +60,10 @@ type GatewaySpec = v1beta1.GatewaySpec
 type Listener = v1beta1.Listener
 
 // ProtocolType defines the application protocol accepted by a Listener.
-// Implementations are not required to accept all the defined protocols.
-// If an implementation does not support a specified protocol, it
-// should set the "Accepted" condition to "False" for the affected Listener with
-// a reason of "UnsupportedProtocol".
+// Implementations are not required to accept all the defined protocols. If an
+// implementation does not support a specified protocol, it MUST set the
+// "Accepted" condition to False for the affected Listener with a reason of
+// "UnsupportedProtocol".
 //
 // Core ProtocolType values are listed in the table below.
 //
@@ -196,9 +196,47 @@ type GatewayConditionType = v1beta1.GatewayConditionType
 type GatewayConditionReason = v1beta1.GatewayConditionReason
 
 const (
-	// This condition is true when the controller managing the
-	// Gateway has scheduled the Gateway to the underlying network
-	// infrastructure.
+	// This condition indicates whether a Gateway has generated some
+	// configuration that will soon be ready in the underlying data plane.
+	//
+	// It is a positive-polarity summary condition, and so should always be
+	// present on the resource with ObservedGeneration set.
+	//
+	// It should be set to Unknown if the controller performs updates to the
+	// status before it has all the information it needs to be able to determine
+	// if the condition is true.
+	//
+	// Possible reasons for this condition to be True are:
+	//
+	// * "Programmed"
+	//
+	// Possible reasons for this condition to be False are:
+	//
+	// * "Invalid"
+	// * "Pending"
+	//
+	// Possible reasons for this condition to be Unknown are:
+	//
+	// * "Pending"
+	//
+	// Controllers may raise this condition with other reasons,
+	// but should prefer to use the reasons listed above to improve
+	// interoperability.
+	GatewayConditionProgrammed GatewayConditionType = "Programmed"
+
+	// This reason is used with the "Programmed" condition when the condition is
+	// true.
+	GatewayReasonProgrammed GatewayConditionReason = "Programmed"
+
+	// This reason is used with the "Programmed" condition when the Listener is
+	// syntactically or semantically invalid.
+	GatewayReasonInvalid GatewayConditionReason = "Invalid"
+)
+
+const (
+	// This condition is true when the controller managing the Gateway is
+	// syntactically and semantically valid enough to produce some configuration
+	// in the underlying data plane, though it has not necessarily configured it yet.
 	//
 	// Possible reasons for this condition to be True are:
 	//
@@ -231,8 +269,9 @@ const (
 	// Deprecated: use the "Accepted" condition with reason "Accepted" instead.
 	GatewayReasonScheduled GatewayConditionReason = "Scheduled"
 
-	// This reason is used with the "Accepted" condition when no controller has
-	// reconciled the Gateway.
+	// This reason is used with the "Accepted", "Programmed" and "Ready"
+	// conditions when the status is "Unknown" and no controller has reconciled
+	// the Gateway.
 	GatewayReasonPending GatewayConditionReason = "Pending"
 
 	// Deprecated: Use "Pending" instead.
@@ -245,11 +284,9 @@ const (
 )
 
 const (
-	// This condition is true when the Gateway is expected to be able
-	// to serve traffic. Note that this does not indicate that the
-	// Gateway configuration is current or even complete (e.g. the
-	// controller may still not have reconciled the latest version,
-	// or some parts of the configuration could be missing).
+	// Ready is an optional Condition that has Extended support. When it's set,
+	// the condition indicates whether the Gateway has been completely configured
+	// and traffic is ready to flow through the data plane immediately.
 	//
 	// If both the "ListenersNotValid" and "ListenersNotReady"
 	// reasons are true, the Gateway controller should prefer the
@@ -433,9 +470,11 @@ const (
 	// This reason is used with the "ResolvedRefs" condition when the
 	// Listener has a TLS configuration with at least one TLS CertificateRef
 	// that is invalid or does not exist.
+	//
 	// A CertificateRef is considered invalid when it refers to a nonexistent
 	// or unsupported resource or kind, or when the data within that resource
 	// is malformed.
+	//
 	// This reason must be used only when the reference is allowed, either by
 	// referencing an object in the same namespace as the Gateway, or when
 	// a cross-namespace reference has been explicitly allowed by a ReferenceGrant.
@@ -455,10 +494,45 @@ const (
 )
 
 const (
-	// This condition indicates whether the Listener has been
-	// configured on the Gateway.
+	// This condition indicates whether a Listener has generated some
+	// configuration that will soon be ready in the underlying data plane.
 	//
-	// Possible reasons for this condition to be true are:
+	// It is a positive-polarity summary condition, and so should always be
+	// present on the resource with ObservedGeneration set.
+	//
+	// It should be set to Unknown if the controller performs updates to the
+	// status before it has all the information it needs to be able to determine
+	// if the condition is true.
+	//
+	// Possible reasons for this condition to be True are:
+	//
+	// * "Programmed"
+	//
+	// Possible reasons for this condition to be False are:
+	//
+	// * "Invalid"
+	// * "Pending"
+	//
+	// Possible reasons for this condition to be Unknown are:
+	//
+	// * "Pending"
+	//
+	// Controllers may raise this condition with other reasons,
+	// but should prefer to use the reasons listed above to improve
+	// interoperability.
+	ListenerConditionProgrammed ListenerConditionType = "Programmed"
+
+	// This reason is used with the "Programmed" condition when the condition is
+	// true.
+	ListenerReasonProgrammed ListenerConditionReason = "Programmed"
+)
+
+const (
+	// Ready is an optional Condition that has Extended support. When it's set,
+	// the condition indicates whether the Listener has been configured on the
+	// Gateway and traffic is ready to flow through the data plane immediately.
+	//
+	// Possible reasons for this condition to be True are:
 	//
 	// * "Ready"
 	//
@@ -480,12 +554,12 @@ const (
 	// true.
 	ListenerReasonReady ListenerConditionReason = "Ready"
 
-	// This reason is used with the "Ready" condition when the
+	// This reason is used with the "Ready" and "Programmed" conditions when the
 	// Listener is syntactically or semantically invalid.
 	ListenerReasonInvalid ListenerConditionReason = "Invalid"
 
-	// This reason is used with the "Accepted" and "Ready" conditions when the
-	// Listener is either not yet reconciled or not yet not online and ready to
-	// accept client traffic.
+	// This reason is used with the "Accepted", "Ready" and "Programmed"
+	// conditions when the Listener is either not yet reconciled or not yet not
+	// online and ready to accept client traffic.
 	ListenerReasonPending ListenerConditionReason = "Pending"
 )

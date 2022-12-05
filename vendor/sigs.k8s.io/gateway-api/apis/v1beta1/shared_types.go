@@ -225,6 +225,12 @@ const (
 	// compatible Listeners whose Hostname matches the route
 	RouteReasonNoMatchingListenerHostname RouteConditionReason = "NoMatchingListenerHostname"
 
+	// This reason is used with the "Accepted" condition when there are
+	// no matching Parents. In the case of Gateways, this can occur when
+	// a Route ParentRef specifies a Port and/or SectionName that does not
+	// match any Listeners in the Gateway.
+	RouteReasonNoMatchingParent RouteConditionReason = "NoMatchingParent"
+
 	// This reason is used with the "Accepted" condition when a value for an Enum
 	// is not recognized.
 	RouteReasonUnsupportedValue RouteConditionReason = "UnsupportedValue"
@@ -345,9 +351,9 @@ type RouteStatus struct {
 // Hostname is the fully qualified domain name of a network host. This matches
 // the RFC 1123 definition of a hostname with 2 notable exceptions:
 //
-//  1. IPs are not allowed.
-//  2. A hostname may be prefixed with a wildcard label (`*.`). The wildcard
-//     label must appear by itself as the first label.
+// 1. IPs are not allowed.
+// 2. A hostname may be prefixed with a wildcard label (`*.`). The wildcard
+//    label must appear by itself as the first label.
 //
 // Hostname can be "precise" which is a domain name without the terminating
 // dot of a network host (e.g. "foo.example.com") or "wildcard", which is a
