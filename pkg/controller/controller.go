@@ -1103,53 +1103,6 @@ func (p *csiProvisioner) getPVCSource(ctx context.Context, claim *v1.PersistentV
 	return volumeContentSource, nil
 }
 
-// TODO: This function should eventually be replaced by a common kubernetes library.
-func (p *csiProvisioner) IsGranted(ctx context.Context, claim *v1.PersistentVolumeClaim) (bool, error) {
-	// Get all ReferenceGrants in data source's namespace
-	referenceGrants, err := p.referenceGrantLister.ReferenceGrants(*claim.Spec.DataSourceRef.Namespace).List(labels.Everything())
-	if err != nil {
-		return false, fmt.Errorf("error getting ReferenceGrants in %s namespace from api server: %v", *claim.Spec.DataSourceRef.Namespace, err)
-	}
-
-	var allowed bool
-	// Check that accessing to {namespace}/{name} is allowed.
-	for _, grant := range referenceGrants {
-		var validFrom bool
-		for _, from := range grant.Spec.From {
-			if from.Group == "" && from.Kind == pvcKind && string(from.Namespace) == claim.Namespace {
-				validFrom = true
-				break
-			}
-		}
-		// Skip unrelated policy by checking From field
-		if !validFrom {
-			continue
-		}
-
-		for _, to := range grant.Spec.To {
-			if (claim.Spec.DataSourceRef.APIGroup != nil && string(to.Group) != *claim.Spec.DataSourceRef.APIGroup) ||
-				(claim.Spec.DataSourceRef.APIGroup == nil && len(to.Group) > 0) ||
-				string(to.Kind) != claim.Spec.DataSourceRef.Kind {
-				continue
-			}
-			if to.Name == nil || string(*to.Name) == "" || string(*to.Name) == claim.Spec.DataSourceRef.Name {
-				allowed = true
-				break
-			}
-		}
-
-		if allowed {
-			break
-		}
-	}
-
-	if !allowed {
-		return allowed, nil
-	}
-
-	return true, nil
-}
-
 // getSnapshotSource verifies DataSource.Kind of type VolumeSnapshot, making sure that the requested Snapshot is available/ready
 // returns the VolumeContentSource for the requested snapshot
 func (p *csiProvisioner) getSnapshotSource(ctx context.Context, claim *v1.PersistentVolumeClaim, sc *storagev1.StorageClass, dataSource *v1.ObjectReference) (*csi.VolumeContentSource, error) {
@@ -1984,8 +1937,13 @@ func (p *csiProvisioner) dataSource(ctx context.Context, claim *v1.PersistentVol
 
 	// In case of cross namespace data source, check if it accepts references.
 	if claim.Namespace != dataSource.Namespace {
-		if ok, err := p.IsGranted(ctx, claim); err != nil || !ok {
-			return nil, fmt.Errorf("accessing snapshot %s/%s from %s/%s isn't allowed", dataSource.Namespace, dataSource.Name, claim.Namespace, claim.Name)
+		// Get all ReferenceGrants in data source's namespace
+		referenceGrants, err := p.referenceGrantLister.ReferenceGrants(dataSource.Namespace).List(labels.Everything())
+		if err != nil {
+			return nil, fmt.Errorf("error getting ReferenceGrants in %s namespace from api server: %v", dataSource.Namespace, err)
+		}
+		if allowed, err := IsGranted(ctx, claim, referenceGrants); err != nil || !allowed {
+			return nil, err
 		}
 	}
 
