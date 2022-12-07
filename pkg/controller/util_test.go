@@ -10,7 +10,7 @@ import (
 )
 
 // newRefGrantList returns a new ReferenceGrant with given attributes
-func newRefGrantList(name, fromNamespace, toNamespace, toGroup, toKind string) []*gatewayv1beta1.ReferenceGrant {
+func newRefGrantList(name, fromNamespace, fromGrop, fromKind, toNamespace, toGroup, toKind string) []*gatewayv1beta1.ReferenceGrant {
 	ReferenceGrantList := []*gatewayv1beta1.ReferenceGrant{
 		{
 			ObjectMeta: metav1.ObjectMeta{
@@ -20,8 +20,8 @@ func newRefGrantList(name, fromNamespace, toNamespace, toGroup, toKind string) [
 			Spec: gatewayv1beta1.ReferenceGrantSpec{
 				From: []gatewayv1beta1.ReferenceGrantFrom{
 					{
-						Group:     gatewayv1beta1.Group(""),
-						Kind:      gatewayv1beta1.Kind("PersistentVolumeClaim"),
+						Group:     gatewayv1beta1.Group(fromGrop),
+						Kind:      gatewayv1beta1.Kind(fromKind),
 						Namespace: gatewayv1beta1.Namespace(toNamespace),
 					},
 				},
@@ -44,7 +44,8 @@ func TestIsGranted(t *testing.T) {
 	snapapiKind := "VolumeSnapshot"
 	coreapiGrp := ""
 	pvcapiKind := "PersistentVolumeClaim"
-	//unsupportedAPIGrp := "unsupported.group.io"
+	anyvolumedatasourceapiGrp := "hello.k8s.io/v1alpha1"
+	anyvolumedatasourceapiKind := "Hello"
 	fromNamespace := "ns1"
 	fromsrcName := "test-dataSource"
 	toNamespace := "ns2"
@@ -57,34 +58,77 @@ func TestIsGranted(t *testing.T) {
 	testcases := map[string]testcase{
 		"Allowed to access dataSource for xns PVC with refGrant": {
 			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, toNamespace, coreapiGrp, pvcapiKind),
+			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, coreapiGrp, pvcapiKind),
 		},
 		"Allowed to access dataSource for xns Snapshot with refGrant": {
 			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, toNamespace, snapapiGrp, snapapiKind),
+			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, snapapiGrp, snapapiKind),
+		},
+		"Allowed to access dataSource for xns AnyVolumeDataSource with refGrant": {
+			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", anyvolumedatasourceapiKind, &fromNamespace, &anyvolumedatasourceapiGrp, requestedBytes, "", true),
+			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, anyvolumedatasourceapiGrp, anyvolumedatasourceapiKind),
 		},
 		"Not allowed to access dataSource for xns PVC without refGrant": {
 			expectErr: true,
 			volOpts:   generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
 		},
-		"Not allowed to access dataSource for xns Snapshot with refGrant": {
+		"Not allowed to access dataSource for xns Snapshot without refGrant": {
 			expectErr: true,
 			volOpts:   generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
 		},
-		"Not allowed to access dataSource for xns PVC with bad namespace refGrant": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, "badnamespace", coreapiGrp, pvcapiKind),
+		"Not allowed to access dataSource for xns AnyVolumeDataSource without refGrant": {
+			expectErr: true,
+			volOpts:   generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", anyvolumedatasourceapiKind, &fromNamespace, &anyvolumedatasourceapiGrp, requestedBytes, "", true),
 		},
-		"Not allowed to access dataSource for xns PVC with bad apiGroup refGrant": {
+		"Not allowed to access dataSource for xns PVC with refGrant of wrong create resource": {
 			expectErr:    true,
 			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, toNamespace, "badapi.group.io", pvcapiKind),
+			refGrantList: newRefGrantList("refGrant1", toNamespace, coreapiGrp, pvcapiKind, fromNamespace, coreapiGrp, pvcapiKind),
 		},
-		"Not allowed to access dataSource for xns PVC with bad apiKind refGrant": {
+		"Not allowed to access dataSource for xns PVC with refGrant of wrong namespace reference": {
 			expectErr:    true,
 			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, toNamespace, coreapiGrp, "BadapiKind"),
+			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, "badnamespace", coreapiGrp, pvcapiKind),
+		},
+		"Not allowed to access dataSource for xns PVC with refGrant of wrong apiGroup": {
+			expectErr:    true,
+			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
+			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, "badapi.group.io", pvcapiKind),
+		},
+		"Not allowed to access dataSource for xns PVC with refGrant of wrong apiKind": {
+			expectErr:    true,
+			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
+			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, coreapiGrp, "BadapiKind"),
+		},
+		"Not allowed to access PVC dataSource for xns PVC with refGrant of SnapShot dataSource": {
+			expectErr:    true,
+			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
+			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, snapapiGrp, snapapiKind),
+		},
+		"Not allowed to access Snapshot dataSource for xns PVC with refGrant of PVC dataSource": {
+			expectErr:    true,
+			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
+			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, coreapiGrp, pvcapiKind),
+		},
+		"Not allowed to access except PersistentVolumeClaim kind": {
+			expectErr:    true,
+			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
+			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, "Example", toNamespace, coreapiGrp, pvcapiKind),
+		},
+		"Not allowed to access except coreapiGroup": {
+			expectErr:    true,
+			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
+			refGrantList: newRefGrantList("refGrant1", fromNamespace, "example.k8s.io", pvcapiKind, toNamespace, coreapiGrp, pvcapiKind),
+		},
+		"Not allowed to access except PersistentVolumeClaim kind and coreapiGroup": {
+			expectErr:    true,
+			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
+			refGrantList: newRefGrantList("refGrant1", fromNamespace, "example.k8s.io", "Example", toNamespace, coreapiGrp, pvcapiKind),
+		},
+		"Not allowed to access dataSource for xns PVC with refGrant of nil toGroup": {
+			expectErr:    true,
+			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
+			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, "", ""),
 		},
 	}
 

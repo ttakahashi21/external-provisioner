@@ -5416,21 +5416,13 @@ func TestProvisionFromPVC(t *testing.T) {
 			}
 			var volumeSource csi.VolumeContentSource_Volume
 			if !tc.expectErr {
-				if tc.xnsEnabled {
-					if tc.volOpts.PVC.Spec.DataSourceRef != nil {
-						volumeSource = csi.VolumeContentSource_Volume{
-							Volume: &csi.VolumeContentSource_VolumeSource{
-								VolumeId: tc.volOpts.PVC.Spec.DataSourceRef.Name,
-							},
-						}
-					} else if tc.volOpts.PVC.Spec.DataSource != nil {
-						volumeSource = csi.VolumeContentSource_Volume{
-							Volume: &csi.VolumeContentSource_VolumeSource{
-								VolumeId: tc.volOpts.PVC.Spec.DataSource.Name,
-							},
-						}
+				if tc.xnsEnabled && tc.volOpts.PVC.Spec.DataSourceRef != nil {
+					volumeSource = csi.VolumeContentSource_Volume{
+						Volume: &csi.VolumeContentSource_VolumeSource{
+							VolumeId: tc.volOpts.PVC.Spec.DataSourceRef.Name,
+						},
 					}
-				} else {
+				} else if tc.volOpts.PVC.Spec.DataSource != nil {
 					volumeSource = csi.VolumeContentSource_Volume{
 						Volume: &csi.VolumeContentSource_VolumeSource{
 							VolumeId: tc.volOpts.PVC.Spec.DataSource.Name,
