@@ -4,161 +4,259 @@ import (
 	"context"
 	"testing"
 
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v8/controller"
 )
 
-// newRefGrantList returns a new ReferenceGrant with given attributes
-func newRefGrantList(name, fromNamespace, fromGrop, fromKind, toNamespace, toGroup, toKind, toName string, settoName bool) []*gatewayv1beta1.ReferenceGrant {
-	ReferenceGrantList := []*gatewayv1beta1.ReferenceGrant{
+func ObjectNamePtr(val string) *gatewayv1beta1.ObjectName {
+	objectName := gatewayv1beta1.ObjectName(val)
+	return &objectName
+}
+
+func generateRefGrantList(namespace string, referenceGrantFrom []gatewayv1beta1.ReferenceGrantFrom, referenceGrantTo []gatewayv1beta1.ReferenceGrantTo) []*gatewayv1beta1.ReferenceGrant {
+	return []*gatewayv1beta1.ReferenceGrant{
 		{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: fromNamespace,
+				Name:      "refGrant",
+				Namespace: namespace,
 			},
 			Spec: gatewayv1beta1.ReferenceGrantSpec{
-				From: []gatewayv1beta1.ReferenceGrantFrom{
-					{
-						Group:     gatewayv1beta1.Group(fromGrop),
-						Kind:      gatewayv1beta1.Kind(fromKind),
-						Namespace: gatewayv1beta1.Namespace(toNamespace),
-					},
-				},
-				To: []gatewayv1beta1.ReferenceGrantTo{
-					{
-						Group: gatewayv1beta1.Group(toGroup),
-						Kind:  gatewayv1beta1.Kind(toKind),
-					},
-				},
+				From: referenceGrantFrom,
+				To:   referenceGrantTo,
 			},
 		},
 	}
+}
 
-	if settoName {
-		objectName := gatewayv1beta1.ObjectName(toName)
-		ReferenceGrantList[0].Spec.To[0].Name = &objectName
+func generatePVCForFromXnsdataSource(namespace string, dataSourceRef *v1.TypedObjectReference, requestedBytes int64) *v1.PersistentVolumeClaim {
+	return &v1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "test-pvc",
+			Namespace:   namespace,
+			UID:         "testid",
+			Annotations: driverNameAnnotation,
+		},
+		Spec: v1.PersistentVolumeClaimSpec{
+			Selector: nil,
+			Resources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{
+					v1.ResourceName(v1.ResourceStorage): *resource.NewQuantity(requestedBytes, resource.BinarySI),
+				},
+			},
+			AccessModes:   []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
+			DataSourceRef: dataSourceRef,
+		},
 	}
-
-	return ReferenceGrantList
 }
 
 func TestIsGranted(t *testing.T) {
 	ctx := context.Background()
 	var requestedBytes int64 = 1000
-	snapapiGrp := "snapshot.storage.k8s.io"
-	snapapiKind := "VolumeSnapshot"
 	coreapiGrp := ""
 	pvcapiKind := "PersistentVolumeClaim"
+	dataSourceName := "test-dataSource"
+	dataSourceNamespace := "ns1"
+	srcNamespace := "ns2"
+	snapapiGrp := "snapshot.storage.k8s.io"
+	snapKind := "VolumeSnapshot"
 	anyvolumedatasourceapiGrp := "hello.k8s.io/v1alpha1"
 	anyvolumedatasourceapiKind := "Hello"
-	fromNamespace := "ns1"
-	fromsrcName := "test-dataSource"
-	toNamespace := "ns2"
 
 	type testcase struct {
-		expectErr    bool
-		volOpts      controller.ProvisionOptions
-		refGrantList []*gatewayv1beta1.ReferenceGrant
+		name                   string
+		expectErr              bool
+		srcNamespace           string
+		dataSourceRef          *v1.TypedObjectReference
+		refGrantsrcNamespace   string
+		referenceGrantFrom     []gatewayv1beta1.ReferenceGrantFrom
+		referenceGrantTo       []gatewayv1beta1.ReferenceGrantTo
+		withoutreferenceGrants bool
 	}
-	testcases := map[string]testcase{
-		"Allowed to access dataSource for xns PVC with refGrant": {
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, coreapiGrp, pvcapiKind, "", false),
-		},
-		"Allowed to access dataSource for xns PVC with refGrant of specify toName": {
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, coreapiGrp, pvcapiKind, fromsrcName, true),
-		},
-		"Allowed to access dataSource for xns PVC with refGrant of specify toName of non": {
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, coreapiGrp, pvcapiKind, "", true),
-		},
-		"Allowed to access dataSource for xns Snapshot with refGrant": {
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, snapapiGrp, snapapiKind, "", false),
-		},
-		"Allowed to access dataSource for xns AnyVolumeDataSource with refGrant": {
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", anyvolumedatasourceapiKind, &fromNamespace, &anyvolumedatasourceapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, anyvolumedatasourceapiGrp, anyvolumedatasourceapiKind, "", false),
-		},
-		"Not allowed to access dataSource for xns PVC without refGrant": {
-			expectErr: true,
-			volOpts:   generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-		},
-		"Not allowed to access dataSource for xns Snapshot without refGrant": {
-			expectErr: true,
-			volOpts:   generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
-		},
-		"Not allowed to access dataSource for xns AnyVolumeDataSource without refGrant": {
-			expectErr: true,
-			volOpts:   generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", anyvolumedatasourceapiKind, &fromNamespace, &anyvolumedatasourceapiGrp, requestedBytes, "", true),
-		},
-		"Not allowed to access dataSource for xns PVC with refGrant of wrong create resource": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", toNamespace, coreapiGrp, pvcapiKind, fromNamespace, coreapiGrp, pvcapiKind, "", false),
-		},
-		"Not allowed to access dataSource for xns PVC with refGrant of wrong namespace reference": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, "badnamespace", coreapiGrp, pvcapiKind, "", false),
-		},
-		"Not allowed to access dataSource for xns PVC with refGrant of wrong apiGroup": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, "badapi.group.io", pvcapiKind, "", false),
-		},
-		"Not allowed to access dataSource for xns PVC with refGrant of wrong apiKind": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, coreapiGrp, "BadapiKind", "", false),
-		},
-		"Not allowed to access dataSource for xns PVC with refGrant of wrong toName": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, coreapiGrp, coreapiGrp, "bad-datasource", true),
-		},
-		"Not allowed to access PVC dataSource for xns PVC with refGrant of SnapShot dataSource": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", pvcapiKind, &fromNamespace, &coreapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, snapapiGrp, snapapiKind, "", false),
-		},
-		"Not allowed to access dataSource of nil apiGroup for xns Snapshot with refGrant": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, nil, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, snapapiGrp, snapapiKind, "", false),
-		},
-		"Not allowed to access Snapshot dataSource for xns PVC with refGrant of PVC dataSource": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, coreapiGrp, pvcapiKind, "", false),
-		},
-		"Not allowed to access except PersistentVolumeClaim kind": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, "Example", toNamespace, coreapiGrp, pvcapiKind, "", false),
-		},
-		"Not allowed to access except coreapiGroup": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, "example.k8s.io", pvcapiKind, toNamespace, coreapiGrp, pvcapiKind, "", false),
-		},
-		"Not allowed to access except PersistentVolumeClaim kind and coreapiGroup": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, "example.k8s.io", "Example", toNamespace, coreapiGrp, pvcapiKind, "", false),
-		},
-		"Not allowed to access dataSource for xns PVC with refGrant of nil toGroup": {
-			expectErr:    true,
-			volOpts:      generatePVCForProvisionFromXnsdataSource(toNamespace, fromsrcName, "", snapapiKind, &fromNamespace, &snapapiGrp, requestedBytes, "", true),
-			refGrantList: newRefGrantList("refGrant1", fromNamespace, coreapiGrp, pvcapiKind, toNamespace, "", "", "", false),
-		},
+
+	var testcases []*testcase
+	baseCase := func() *testcase {
+		return &testcase{
+			name:         "Allowed to access dataSource for xns PVC with refGrant",
+			expectErr:    false,
+			srcNamespace: srcNamespace,
+			dataSourceRef: &v1.TypedObjectReference{
+				APIGroup:  &coreapiGrp,
+				Kind:      pvcapiKind,
+				Name:      dataSourceName,
+				Namespace: &dataSourceNamespace,
+			},
+			refGrantsrcNamespace: dataSourceNamespace,
+			referenceGrantFrom: []gatewayv1beta1.ReferenceGrantFrom{
+				{
+					Group:     gatewayv1beta1.Group(coreapiGrp),
+					Kind:      gatewayv1beta1.Kind(pvcapiKind),
+					Namespace: gatewayv1beta1.Namespace(srcNamespace),
+				},
+			},
+			referenceGrantTo: []gatewayv1beta1.ReferenceGrantTo{
+				{
+					Group: gatewayv1beta1.Group(coreapiGrp),
+					Kind:  gatewayv1beta1.Kind(pvcapiKind),
+				},
+			},
+			withoutreferenceGrants: false,
+		}
 	}
+	testcases = append(testcases, baseCase())
+
+	modified := baseCase()
+	modified.name = "Allowed to access dataSource for xns PVC with refGrant of specify toName"
+	modified.referenceGrantTo[0].Name = ObjectNamePtr(dataSourceName)
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Allowed to access dataSource of apiGroup nil for xns PVC with refGrant"
+	modified.dataSourceRef.APIGroup = nil
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Allowed to access dataSource for xns PVC with refGrant of specify toName of nil"
+	modified.referenceGrantTo[0].Name = nil
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Allowed to access dataSource for xns PVC with refGrant of specify toName of non"
+	modified.referenceGrantTo[0].Name = ObjectNamePtr("")
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Allowed to access dataSource for xns Snapshot with refGrant"
+	modified.dataSourceRef.APIGroup = &snapapiGrp
+	modified.dataSourceRef.Kind = snapKind
+	modified.referenceGrantTo[0].Group = gatewayv1beta1.Group(snapapiGrp)
+	modified.referenceGrantTo[0].Kind = gatewayv1beta1.Kind(snapKind)
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Allowed to access dataSource for xns AnyVolumeDataSource with refGrant"
+	modified.dataSourceRef.APIGroup = &anyvolumedatasourceapiGrp
+	modified.dataSourceRef.Kind = anyvolumedatasourceapiKind
+	modified.referenceGrantTo[0].Group = gatewayv1beta1.Group(anyvolumedatasourceapiGrp)
+	modified.referenceGrantTo[0].Kind = gatewayv1beta1.Kind(anyvolumedatasourceapiKind)
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns PVC without refGrant"
+	modified.expectErr = true
+	modified.withoutreferenceGrants = true
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns Snapshot without refGrant"
+	modified.expectErr = true
+	modified.dataSourceRef.APIGroup = &snapapiGrp
+	modified.dataSourceRef.Kind = snapKind
+	modified.withoutreferenceGrants = true
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns AnyVolumeDataSource without refGrant"
+	modified.expectErr = true
+	modified.dataSourceRef.APIGroup = &anyvolumedatasourceapiGrp
+	modified.dataSourceRef.Kind = anyvolumedatasourceapiKind
+	modified.withoutreferenceGrants = true
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns PVC with refGrant of wrong create namespace"
+	modified.expectErr = true
+	modified.refGrantsrcNamespace = "wrong-create-namespace"
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns PVC with refGrant of wrong fromGroup"
+	modified.expectErr = true
+	modified.referenceGrantFrom[0].Group = gatewayv1beta1.Group("wrong.fromGroup")
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns PVC with refGrant of wrong fromKind"
+	modified.expectErr = true
+	modified.referenceGrantFrom[0].Group = gatewayv1beta1.Group("wrongfromKind")
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns PVC with refGrant of wrong fromNamespace"
+	modified.expectErr = true
+	modified.referenceGrantFrom[0].Namespace = gatewayv1beta1.Namespace("wrong-fromNamespace")
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns PVC with refGrant of wrong toGroup"
+	modified.expectErr = true
+	modified.referenceGrantTo[0].Group = gatewayv1beta1.Group("wrong.toGroup")
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns PVC with refGrant of wrong toKind"
+	modified.expectErr = true
+	modified.referenceGrantTo[0].Kind = gatewayv1beta1.Kind("WrongtoKind")
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns PVC with refGrant of wrong toName"
+	modified.expectErr = true
+	modified.referenceGrantTo[0].Name = ObjectNamePtr("wrong-dataSource-name")
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access PVC dataSource for xns PVC with refGrant of SnapShot dataSource"
+	modified.expectErr = true
+	modified.referenceGrantTo[0].Group = gatewayv1beta1.Group(snapapiGrp)
+	modified.referenceGrantTo[0].Kind = gatewayv1beta1.Kind(snapKind)
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access Snapshot dataSource of apiGroup nil for xns Snapshot with refGrant"
+	modified.expectErr = true
+	modified.dataSourceRef.APIGroup = nil
+	modified.dataSourceRef.Kind = snapKind
+	modified.referenceGrantTo[0].Group = gatewayv1beta1.Group(snapapiGrp)
+	modified.referenceGrantTo[0].Kind = gatewayv1beta1.Kind(snapKind)
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access Snapshot dataSource for xns PVC with refGrant of PVC dataSource"
+	modified.expectErr = true
+	modified.dataSourceRef.APIGroup = &snapapiGrp
+	modified.dataSourceRef.Kind = snapKind
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns PVC with refGrant of referenceGrantFrom empty"
+	modified.expectErr = true
+	modified.referenceGrantFrom = []gatewayv1beta1.ReferenceGrantFrom{}
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns PVC with refGrant of referenceGrantTo empty"
+	modified.expectErr = true
+	modified.referenceGrantTo = []gatewayv1beta1.ReferenceGrantTo{}
+	testcases = append(testcases, modified)
+
+	modified = baseCase()
+	modified.name = "Not allowed to access dataSource for xns PVC with refGrant of referenceGrantFrom and referenceGrantTo empty"
+	modified.expectErr = true
+	modified.referenceGrantFrom = []gatewayv1beta1.ReferenceGrantFrom{}
+	modified.referenceGrantTo = []gatewayv1beta1.ReferenceGrantTo{}
+	testcases = append(testcases, modified)
 
 	doit := func(t *testing.T, tc testcase) {
-		allowed, err := IsGranted(ctx, tc.volOpts.PVC, tc.refGrantList)
-
+		var refGrantList []*gatewayv1beta1.ReferenceGrant
+		if tc.withoutreferenceGrants {
+			refGrantList = nil
+		} else {
+			refGrantList = generateRefGrantList(tc.refGrantsrcNamespace, tc.referenceGrantFrom, tc.referenceGrantTo)
+		}
+		claim := generatePVCForFromXnsdataSource(tc.srcNamespace, tc.dataSourceRef, requestedBytes)
+		allowed, err := IsGranted(ctx, claim, refGrantList)
 		if tc.expectErr && (err == nil || allowed) {
 			t.Errorf("Expected error, got none")
 		}
@@ -167,9 +265,9 @@ func TestIsGranted(t *testing.T) {
 		}
 	}
 
-	for k, tc := range testcases {
-		t.Run(k, func(t *testing.T) {
-			doit(t, tc)
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			doit(t, *tc)
 		})
 	}
 }

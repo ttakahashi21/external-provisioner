@@ -941,11 +941,7 @@ func (p *csiProvisioner) Provision(ctx context.Context, options controller.Provi
 }
 
 func (p *csiProvisioner) setCloneFinalizer(ctx context.Context, pvc *v1.PersistentVolumeClaim, dataSource *v1.ObjectReference) error {
-	var claim *v1.PersistentVolumeClaim
-	var err error
-
-	claim, err = p.claimLister.PersistentVolumeClaims(dataSource.Namespace).Get(dataSource.Name)
-
+	claim, err := p.claimLister.PersistentVolumeClaims(dataSource.Namespace).Get(dataSource.Name)
 	if err != nil {
 		return err
 	}

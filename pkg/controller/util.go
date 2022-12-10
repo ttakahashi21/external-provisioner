@@ -13,6 +13,12 @@ func IsGranted(ctx context.Context, claim *v1.PersistentVolumeClaim, referenceGr
 	var allowed bool
 	// Check that accessing to {namespace}/{name} is allowed.
 	for _, grant := range referenceGrants {
+		// The ReferenceGrant must be defined in the namespace of
+		// the DataSourceRef.Namespace
+		if grant.Namespace != *claim.Spec.DataSourceRef.Namespace {
+			continue
+		}
+
 		var validFrom bool
 		for _, from := range grant.Spec.From {
 			if from.Group == "" && from.Kind == pvcKind && string(from.Namespace) == claim.Namespace {
@@ -37,14 +43,12 @@ func IsGranted(ctx context.Context, claim *v1.PersistentVolumeClaim, referenceGr
 			}
 		}
 
+		// If we got here, both the "from" and the "to" were allowed by this
+		// reference grant.
 		if allowed {
-			break
+			return allowed, nil
 		}
 	}
-
-	if !allowed {
-		return false, fmt.Errorf("accessing %s/%s of %s dataSource from %s/%s isn't allowed", *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Spec.DataSourceRef.Kind, claim.Namespace, claim.Name)
-	}
-
-	return allowed, nil
+	// If we got here, no reference policy or reference grant allowed both the "from" and "to".
+	return false, fmt.Errorf("accessing %s/%s of %s dataSource from %s/%s isn't allowed", *claim.Spec.DataSourceRef.Namespace, claim.Spec.DataSourceRef.Name, claim.Spec.DataSourceRef.Kind, claim.Namespace, claim.Name)
 }
